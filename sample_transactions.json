@@ -1,0 +1,104 @@
+[
+  {
+    "date": "2024-01-15",
+    "description": "Monthly Salary",
+    "amount": 5000.00,
+    "category": "Income"
+  },
+  {
+    "date": "2024-01-16",
+    "description": "Rent Payment",
+    "amount": -1500.00,
+    "category": "Housing"
+  },
+  {
+    "date": "2024-01-17",
+    "description": "Grocery Store",
+    "amount": -150.00,
+    "category": "Food"
+  },
+  {
+    "date": "2024-01-18",
+    "description": "Uber Ride",
+    "amount": -25.00,
+    "category": "Transportation"
+  },
+  {
+    "date": "2024-01-19",
+    "description": "Electric Bill",
+    "amount": -120.00,
+    "category": "Utilities"
+  },
+  {
+    "date": "2024-01-20",
+    "description": "Netflix Subscription",
+    "amount": -15.00,
+    "category": "Entertainment"
+  },
+  {
+    "date": "2024-01-21",
+    "description": "Doctor Visit",
+    "amount": -50.00,
+    "category": "Healthcare"
+  },
+  {
+    "date": "2024-01-22",
+    "description": "Gas Station",
+    "amount": -60.00,
+    "category": "Transportation"
+  },
+  {
+    "date": "2024-01-23",
+    "description": "Restaurant Dinner",
+    "amount": -85.00,
+    "category": "Food"
+  },
+  {
+    "date": "2024-01-24",
+    "description": "Amazon Purchase",
+    "amount": -120.00,
+    "category": "Shopping"
+  },
+  {
+    "date": "2024-01-25",
+    "description": "Gambling Transaction",
+    "amount": -500.00,
+    "category": "Entertainment"
+  },
+  {
+    "date": "2024-01-26",
+    "description": "Pharmacy",
+    "amount": -30.00,
+    "category": "Healthcare"
+  },
+  {
+    "date": "2024-01-27",
+    "description": "Spotify",
+    "amount": -10.00,
+    "category": "Entertainment"
+  },
+  {
+    "date": "2024-01-28",
+    "description": "Water Bill",
+    "amount": -45.00,
+    "category": "Utilities"
+  },
+  {
+    "date": "2024-01-29",
+    "description": "Internet Bill",
+    "amount": -80.00,
+    "category": "Utilities"
+  },
+  {
+    "date": "2024-01-30",
+    "description": "Freelance Payment",
+    "amount": 1000.00,
+    "category": "Income"
+  },
+  {
+    "date": "2024-01-31",
+    "description": "Target Store",
+    "amount": -200.00,
+    "category": "Shopping"
+  }
+]

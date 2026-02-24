@@ -1,0 +1,210 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --fintech-dark: #0a0f1a;
+  --fintech-darker: #050810;
+  --fintech-card: #0d1424;
+  --fintech-border: #1a2540;
+  --emerald-glow: #10b981;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--fintech-darker);
+  color: #e2e8f0;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--fintech-darker);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--fintech-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2d3f5f;
+}
+
+/* Glass Card Effect */
+.glass-card {
+  background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+}
+
+.glass-card-hover {
+  transition: all 0.3s ease;
+}
+
+.glass-card-hover:hover {
+  background: linear-gradient(135deg, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0.04) 100%);
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: 0 0 30px rgba(16, 185, 129, 0.1);
+}
+
+/* Emerald Glow Effects */
+.emerald-glow {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+}
+
+.emerald-text {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.emerald-border {
+  border-color: #10b981;
+}
+
+/* Status Indicators */
+.status-success {
+  color: #10b981;
+}
+
+.status-warning {
+  color: #f59e0b;
+}
+
+.status-error {
+  color: #ef4444;
+}
+
+/* Monospace Numbers */
+.mono-number {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(16, 185, 129, 0.6);
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(16, 185, 129, 0.1) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+/* Drag and Drop Zone */
+.drop-zone {
+  border: 2px dashed var(--fintech-border);
+  transition: all 0.3s ease;
+}
+
+.drop-zone:hover,
+.drop-zone.active {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.05);
+}
+
+/* Progress Bar */
+.progress-bar {
+  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+  height: 4px;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Button Styles */
+.btn-primary {
+  @apply px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all duration-200;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5);
+  transform: translateY(-1px);
+}
+
+.btn-primary:disabled {
+  @apply opacity-50 cursor-not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  @apply px-6 py-3 bg-fintech-card border border-fintech-border hover:border-emerald-500/50 text-gray-300 hover:text-white font-medium rounded-xl transition-all duration-200;
+}
+
+/* Input Styles */
+.input-field {
+  @apply w-full px-4 py-3 bg-fintech-darker border border-fintech-border rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200;
+}
+
+/* Table Styles */
+.table-row {
+  @apply border-b border-fintech-border hover:bg-fintech-cardHover transition-colors duration-150;
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  @apply fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50;
+}
+
+/* Workflow Step */
+.workflow-step {
+  @apply relative flex items-center gap-4;
+}
+
+.workflow-step::before {
+  content: '';
+  @apply absolute left-5 top-10 w-0.5 h-8 bg-fintech-border;
+}
+
+.workflow-step:last-child::before {
+  @apply hidden;
+}
+
+.workflow-step.completed::before {
+  @apply bg-emerald-500;
+}
+
+.workflow-step.running::before {
+  @apply bg-emerald-500 animate-pulse;
+}

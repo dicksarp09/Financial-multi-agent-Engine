@@ -1,0 +1,16 @@
+{
+  "name": "financial-agent-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "uvicorn": "uvicorn main:app --reload --port 8000",
+    "start": "uvicorn main:app --host 0.0.0.0 --port 8000"
+  },
+  "dependencies": {
+    "fastapi": "^0.110.0",
+    "uvicorn": "^0.27.1",
+    "python-multipart": "^0.0.9",
+    "pydantic": "^2.6.3",
+    "sqlalchemy": "^2.0.29"
+  }
+}
