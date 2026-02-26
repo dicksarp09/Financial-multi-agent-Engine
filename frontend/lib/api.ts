@@ -1,6 +1,6 @@
 // API Service for connecting frontend to backend
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = 'http://localhost:8002/api';
 
 async function fetchJSON(url: string, options?: RequestInit) {
   const response = await fetch(url, {

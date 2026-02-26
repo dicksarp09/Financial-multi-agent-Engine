@@ -374,6 +374,9 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
         total_expenses = 0.0
         category_totals = {}
         
+        # Initial delay before starting
+        await asyncio.sleep(0.5)
+        
         for idx, (state, label) in enumerate(states):
             # Update workflow state
             for i, step in enumerate(workflow_state[session_id]):
@@ -500,11 +503,12 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
                     
                     return  # Stop here until approved
             
-            await asyncio.sleep(0.8)
+            # Add delay between steps to make processing visible
+            await asyncio.sleep(1.5)
         
-        # Mark complete
+        # Mark all steps as complete including COMPLETE
         for step in workflow_state[session_id]:
-            step.completed = step.state != AgentState.WAITING_APPROVAL
+            step.completed = True
             step.running = False
         
         # Compute savings rate
@@ -562,8 +566,18 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
             del current_approvals[session_id]
         
         system_status.activeSessions = max(0, system_status.activeSessions - 1)
+        print(f"[DEBUG] Workflow completed for session {session_id}")
     
-    background_tasks.add_task(run_workflow)
+    # Add error handling wrapper
+    async def run_workflow_safe():
+        try:
+            await run_workflow()
+        except Exception as e:
+            print(f"[ERROR] Workflow failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    background_tasks.add_task(run_workflow_safe)
     return {"status": "started", "session_id": session_id}
 
 
@@ -881,10 +895,14 @@ async def export_report(session_id: str, format: str = "json"):
 
 
 # Conversation / NLP Processing using Agent Architecture
+class ConversationRequest(BaseModel):
+    message: str
+
 @app.post("/api/conversation/{session_id}")
-async def send_message(session_id: str, message: str):
+async def send_message(session_id: str, request: ConversationRequest):
     """Process conversational refinement using the agent architecture"""
     
+    message = request.message
     # Import from orchestrator
     try:
         from orchestrator import refine_session
@@ -896,6 +914,8 @@ async def send_message(session_id: str, message: str):
     # Get current report and transactions
     transactions = transactions_db.get(session_id, [])
     report = reports_db.get(session_id)
+    
+    print(f"[DEBUG] Conversation: session_id={session_id}, transactions={len(transactions)}, report={'found' if report else 'NOT FOUND'}, reports_keys={list(reports_db.keys())}")
     
     if not report:
         return {
@@ -1396,4 +1416,10 @@ async def get_suggestions(session_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import sys
+    
+    port = 8000
+    if len(sys.argv) > 2 and sys.argv[1] == '--port':
+        port = int(sys.argv[2])
+    
+    uvicorn.run(app, host="0.0.0.0", port=port)

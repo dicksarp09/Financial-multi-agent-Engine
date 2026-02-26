@@ -362,7 +362,7 @@ body {
 }
 
 .data-table tr:hover td {
-  @apply bg-fintech-card-hover;
+  background-color: #141d30;
 }
 
 /* Progress Bar */

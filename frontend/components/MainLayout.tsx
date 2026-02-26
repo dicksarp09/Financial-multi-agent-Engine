@@ -58,6 +58,7 @@ export function MainLayout() {
     setWorkflowSteps,
     agentLogs,
     setAgentLogs,
+    clearAgentLogs,
     loadWorkflow,
     loadExecutionLogs,
     loadApproval,
@@ -86,30 +87,39 @@ export function MainLayout() {
         await loadWorkflow(currentSessionId);
         await loadExecutionLogs(currentSessionId);
         await loadApproval(currentSessionId);
-        
-        const complete = workflowSteps.some(s => s.completed && s.state === 'COMPLETE');
-        if (complete) {
-          setIsExecuting(false);
-          await loadReport(currentSessionId);
-          setActiveTab('dashboard');
-        }
       }, 1000);
       return () => clearInterval(interval);
     }
   }, [isExecuting, currentSessionId]);
+
+  // Check for completion
+  useEffect(() => {
+    const complete = workflowSteps.some(s => s.completed && s.state === 'COMPLETE');
+    if (complete && isExecuting) {
+      console.log('[Workflow] Complete detected, switching to dashboard');
+      loadReport(currentSessionId!).then(() => {
+        setActiveTab('dashboard');
+        setIsExecuting(false);
+      });
+    }
+  }, [workflowSteps, isExecuting, currentSessionId]);
 
   // Scroll chat to bottom
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // Convert agent logs to terminal logs
+  // Convert agent logs to terminal logs - show each step progressively
   useEffect(() => {
-    const logs = agentLogs.map(log => ({
-      status: log.details?.includes('completed') ? 'ok' : 'running',
-      message: `${log.agent.toUpperCase()}: ${log.details || log.action}`,
-      timestamp: new Date(log.timestamp)
-    }));
+    const logs = agentLogs.map((log, idx) => {
+      // Latest log is running, others are completed
+      const isLatest = idx === agentLogs.length - 1;
+      return {
+        status: isLatest ? 'running' : 'ok',
+        message: `${log.agent.toUpperCase()}: ${log.details || log.action}`,
+        timestamp: new Date(log.timestamp)
+      };
+    });
     setTerminalLogs(logs);
   }, [agentLogs]);
 
@@ -137,14 +147,21 @@ export function MainLayout() {
   const runWorkflow = async (sessionId: string) => {
     setIsExecuting(true);
     setWorkflowSteps(defaultWorkflowSteps.map((s, i) => ({ ...s, running: i === 0 })));
-    setTerminalLogs([]);
+    setTerminalLogs([]); // Clear previous terminal display
+    clearAgentLogs(); // Clear store logs
     setChatMessages([{
       role: 'assistant',
       content: 'Starting analysis...',
       timestamp: new Date()
     }]);
     
-    await executeWorkflow(sessionId);
+    console.log('[Workflow] Starting for session:', sessionId);
+    try {
+      const result = await executeWorkflow(sessionId);
+      console.log('[Workflow] Started:', result);
+    } catch (error) {
+      console.error('[Workflow] Error starting:', error);
+    }
   };
 
   const handleChatSubmit = async () => {
@@ -156,19 +173,40 @@ export function MainLayout() {
     setIsChatLoading(true);
     
     try {
+      console.log('[Chat] Sending message:', userMessage, 'to session:', currentSessionId);
+      console.log('[Chat] Reports DB check - will verify on backend');
       const response = await sendMessage(currentSessionId, userMessage);
+      console.log('[Chat] Response:', response);
+      
+      let messageContent = 'No response';
+      if (response) {
+        if (typeof response.message === 'string') {
+          messageContent = response.message;
+        } else if (response.message) {
+          messageContent = JSON.stringify(response.message);
+        } else if (response.error) {
+          messageContent = 'Error: ' + response.error;
+        }
+      }
+      
       setChatMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: response.message, 
+        content: messageContent, 
         timestamp: new Date() 
       }]);
       
       // Reload report if metrics changed
-      if (response.updatedMetrics && currentReport) {
+      if (response?.updatedMetrics && currentReport) {
         await loadReport(currentSessionId);
       }
     } catch (error) {
-      console.error('Chat error:', error);
+      console.error('[Chat] Error:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      setChatMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: 'Error: ' + errorMsg, 
+        timestamp: new Date() 
+      }]);
     } finally {
       setIsChatLoading(false);
     }
@@ -553,6 +591,9 @@ export function MainLayout() {
             <MessageSquare className="w-5 h-5 text-emerald-400" />
             Financial Agent
           </h2>
+          {currentSessionId && (
+            <p className="text-xs text-gray-500 mt-1">Session: {currentSessionId}</p>
+          )}
         </div>
         
         {/* Chat Messages */}
