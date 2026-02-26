@@ -5,11 +5,23 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
+  /* Color Palette */
+  --deep-slate: #1A1A2E;
+  --deep-slate-dark: #0F0F1A;
+  --emerald: #10B981;
+  --emerald-light: #34D399;
+  --emerald-dark: #059669;
+  --rose: #F43F5E;
+  --rose-light: #FB7185;
+  --amber: #F59E0B;
+  --amber-light: #FBBF24;
+  
+  /* Legacy support */
   --fintech-dark: #0a0f1a;
   --fintech-darker: #050810;
   --fintech-card: #0d1424;
   --fintech-border: #1a2540;
-  --emerald-glow: #10b981;
+  --fintech-card-hover: #141d30;
 }
 
 * {
@@ -20,7 +32,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--fintech-darker);
+  background-color: var(--deep-slate-dark);
   color: #e2e8f0;
   font-family: 'Inter', system-ui, sans-serif;
 }
@@ -32,16 +44,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--fintech-darker);
+  background: var(--deep-slate-dark);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--fintech-border);
+  background: #2D3748;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #2d3f5f;
+  background: #4A5568;
 }
 
 /* Glass Card Effect */
@@ -75,26 +87,73 @@ body {
 }
 
 .emerald-border {
-  border-color: #10b981;
+  border-color: #10B981;
+}
+
+/* Rose for expenses */
+.rose-text {
+  color: #F43F5E;
+}
+
+.rose-bg {
+  background-color: rgba(244, 63, 94, 0.1);
 }
 
 /* Status Indicators */
 .status-success {
-  color: #10b981;
+  color: #10B981;
 }
 
 .status-warning {
-  color: #f59e0b;
+  color: #F59E0B;
 }
 
 .status-error {
-  color: #ef4444;
+  color: #F43F5E;
 }
 
-/* Monospace Numbers */
+/* Monospace Numbers - JetBrains Mono */
 .mono-number {
   font-family: 'JetBrains Mono', monospace;
   font-variant-numeric: tabular-nums;
+}
+
+/* Number Flip Animation */
+@keyframes numberFlip {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  51% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-number-flip {
+  animation: numberFlip 0.4s ease-out;
+}
+
+/* Flash Green for savings increase */
+@keyframes flashGreen {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(16, 185, 129, 0.3);
+  }
+}
+
+.animate-flash-green {
+  animation: flashGreen 1s ease-out;
 }
 
 /* Animations */
@@ -131,6 +190,24 @@ body {
   animation: shimmer 2s infinite;
 }
 
+/* Terminal / Live Feed */
+.terminal-line {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.875rem;
+}
+
+.terminal-ok {
+  color: #10B981;
+}
+
+.terminal-running {
+  color: #F59E0B;
+}
+
+.terminal-error {
+  color: #F43F5E;
+}
+
 /* Drag and Drop Zone */
 .drop-zone {
   border: 2px dashed var(--fintech-border);
@@ -139,16 +216,8 @@ body {
 
 .drop-zone:hover,
 .drop-zone.active {
-  border-color: #10b981;
+  border-color: #10B981;
   background: rgba(16, 185, 129, 0.05);
-}
-
-/* Progress Bar */
-.progress-bar {
-  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
-  height: 4px;
-  border-radius: 2px;
-  transition: width 0.3s ease;
 }
 
 /* Button Styles */
@@ -177,14 +246,131 @@ body {
   @apply w-full px-4 py-3 bg-fintech-darker border border-fintech-border rounded-xl text-gray-200 placeholder-gray-500 focus:outline-none focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 transition-all duration-200;
 }
 
-/* Table Styles */
-.table-row {
-  @apply border-b border-fintech-border hover:bg-fintech-cardHover transition-colors duration-150;
+/* Status Pills */
+.status-pill {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.status-pill-categorized {
+  @apply bg-emerald-500/20 text-emerald-400;
+}
+
+.status-pill-flagged {
+  @apply bg-rose-500/20 text-rose-400;
+}
+
+.status-pill-pending {
+  @apply bg-amber-500/20 text-amber-400;
 }
 
 /* Modal Overlay */
 .modal-overlay {
   @apply fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50;
+}
+
+/* Focus Card for Anomaly Interrupts */
+.focus-card {
+  @apply glass-card p-6 max-w-md;
+  border: 2px solid #F59E0B;
+  box-shadow: 0 0 40px rgba(245, 158, 11, 0.3);
+}
+
+/* Ghost Chart Overlay */
+.ghost-bar {
+  opacity: 0.4;
+  stroke-dasharray: 4;
+}
+
+/* Chat Panel */
+.chat-message {
+  @apply p-3 rounded-lg max-w-[85%];
+}
+
+.chat-message-user {
+  @apply bg-emerald-600/20 border border-emerald-500/30 ml-auto;
+}
+
+.chat-message-agent {
+  @apply bg-fintech-card border border-fintech-border mr-auto;
+}
+
+/* Layout */
+.app-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr 360px;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  @apply bg-fintech-card border-r border-fintech-border;
+}
+
+.main-stage {
+  @apply overflow-y-auto;
+  background: linear-gradient(180deg, var(--deep-slate) 0%, var(--deep-slate-dark) 100%);
+}
+
+.agent-panel {
+  @apply bg-fintech-card border-l border-fintech-border flex flex-col;
+}
+
+/* Tab Styles */
+.tab-button {
+  @apply px-4 py-2 text-sm font-medium text-gray-400 border-b-2 border-transparent transition-all duration-200;
+}
+
+.tab-button:hover {
+  @apply text-white;
+}
+
+.tab-button.active {
+  @apply text-emerald-400 border-emerald-400;
+}
+
+/* Metric Ribbon */
+.metric-ribbon {
+  @apply glass-card p-4 flex flex-col;
+}
+
+.metric-value {
+  @apply text-2xl font-bold;
+}
+
+.metric-label {
+  @apply text-xs text-gray-400 uppercase tracking-wide;
+}
+
+/* Donut Chart */
+.donut-chart {
+  position: relative;
+  width: 200px;
+  height: 200px;
+}
+
+/* Table */
+.data-table {
+  @apply w-full text-sm;
+}
+
+.data-table th {
+  @apply text-left text-xs text-gray-500 uppercase tracking-wide py-3 px-4 border-b border-fintech-border;
+}
+
+.data-table td {
+  @apply py-3 px-4 border-b border-fintech-border;
+}
+
+.data-table tr:hover td {
+  @apply bg-fintech-card-hover;
+}
+
+/* Progress Bar */
+.progress-bar {
+  background: linear-gradient(90deg, #10B981 0%, #34D399 100%);
+  height: 4px;
+  border-radius: 2px;
+  transition: width 0.3s ease;
 }
 
 /* Workflow Step */

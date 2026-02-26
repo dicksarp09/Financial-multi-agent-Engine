@@ -1,0 +1,49 @@
+date,description,amount,category,transaction_id
+2024-01-01,Salary Deposit,5000.00,Income,TXN001
+2024-01-02,Rent Payment,-1200.00,Housing,TXN002
+2024-01-03,Grocery Store,-85.50,Food,TXN003
+2024-01-05,Electric Bill,-120.00,Utilities,TXN004
+2024-01-07,Gas Station,-45.00,Transportation,TXN005
+2024-01-10,Restaurant,-65.00,Food,TXN006
+2024-01-12,Internet Bill,-79.99,Utilities,TXN007
+2024-01-15,Freelance Project,800.00,Income,TXN008
+2024-01-15,Netflix Subscription,-15.99,Entertainment,TXN009
+2024-01-18,Doctor Visit,-150.00,Healthcare,TXN010
+2024-01-20,Supermarket,-120.75,Food,TXN011
+2024-01-22,Car Insurance,-180.00,Insurance,TXN012
+2024-01-25,Pharmacy,-45.00,Healthcare,TXN013
+2024-01-26,Coffee Shop,-12.50,Food,TXN014
+2024-01-28,Online Shopping,-250.00,Shopping,TXN015
+2024-01-30,Gym Membership,-50.00,Fitness,TXN016
+2024-02-01,Salary Deposit,5000.00,Income,TXN017
+2024-02-02,Rent Payment,-1200.00,Housing,TXN018
+2024-02-03,Grocery Store,-95.20,Food,TXN019
+2024-02-05,Gas Station,-55.00,Transportation,TXN020
+2024-02-07,Restaurant,-78.00,Food,TXN021
+2024-02-10,Electric Bill,-135.00,Utilities,TXN022
+2024-02-12,Water Bill,-45.00,Utilities,TXN023
+2024-02-14,Valentine's Gift,-120.00,Shopping,TXN024
+2024-02-15,Bonus,1500.00,Income,TXN025
+2024-02-15,Spotify Subscription,-9.99,Entertainment,TXN026
+2024-02-18,Supermarket,-130.50,Food,TXN027
+2024-02-20,Dentist,-200.00,Healthcare,TXN028
+2024-02-22,Car Maintenance,-350.00,Transportation,TXN029
+2024-02-24,Phone Bill,-85.00,Utilities,TXN030
+2024-02-26,Fast Food,-18.50,Food,TXN031
+2024-02-28,Clothing,-200.00,Shopping,TXN032
+2024-03-01,Salary Deposit,5000.00,Income,TXN033
+2024-03-02,Rent Payment,-1200.00,Housing,TXN034
+2024-03-03,Grocery Store,-110.00,Food,TXN035
+2024-03-05,Gas Station,-60.00,Transportation,TXN036
+2024-03-07,Movie Tickets,-35.00,Entertainment,TXN037
+2024-03-10,Electric Bill,-140.00,Utilities,TXN038
+2024-03-12,Home Insurance,-150.00,Insurance,TXN039
+2024-03-15,Consulting Project,1200.00,Income,TXN040
+2024-03-15,Gym Membership,-50.00,Fitness,TXN041
+2024-03-18,Supermarket,-145.00,Food,TXN042
+2024-03-20,Pharmacy,-75.00,Healthcare,TXN043
+2024-03-22,Restaurant,-90.00,Food,TXN044
+2024-03-24,Internet Bill,-79.99,Utilities,TXN045
+2024-03-26,Car Insurance,-180.00,Insurance,TXN046
+2024-03-28,Online Shopping,-300.00,Shopping,TXN047
+2024-03-30,Concert Tickets,-120.00,Entertainment,TXN048

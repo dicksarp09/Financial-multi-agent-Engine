@@ -2,7 +2,8 @@
 
 import { useState, useCallback } from 'react';
 import { useAppStore } from '@/store';
-import { Upload as UploadIcon, File, Check, X, AlertCircle, Play, ArrowRight } from 'lucide-react';
+import { createSession, validateFile, executeWorkflow } from '@/lib/api';
+import { Upload as UploadIcon, File, Check, AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
 const schemaColumns = [
@@ -25,11 +26,15 @@ export function UploadSession() {
     clearAgentLogs,
     workflowSteps,
     setWorkflowSteps,
-    setCurrentAgentState
+    setCurrentAgentState,
+    currentSessionId,
+    setCurrentSessionId,
+    startExecution
   } = useAppStore();
 
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -55,65 +60,48 @@ export function UploadSession() {
     const file = e.target.files?.[0];
     if (file) {
       setFileName(file.name);
-      validateFile(file);
+      handleValidateFile(file);
     }
   };
 
-  const validateFile = (file: File) => {
-    // Simulate validation
-    setTimeout(() => {
+  const handleValidateFile = async (file: File) => {
+    setIsUploading(true);
+    try {
+      const session = await createSession();
+      setCurrentSessionId(session.id);
+      
+      const result = await validateFile(file, session.id);
+      
+      if (result.valid) {
+        setUploadValidation({
+          valid: true,
+          errors: result.errors || [],
+        });
+        
+        setUploadedTransactions(result.transactions || []);
+      } else {
+        setUploadValidation({
+          valid: false,
+          errors: result.errors || ['Validation failed'],
+        });
+      }
+    } catch (error) {
+      console.error('Upload failed:', error);
       setUploadValidation({
-        valid: true,
-        errors: [],
+        valid: false,
+        errors: ['Failed to upload and validate file'],
       });
-      
-      // Sample transactions
-      setUploadedTransactions([
-        { id: '1', date: '2024-02-01', description: 'Salary', amount: 5000 },
-        { id: '2', date: '2024-02-02', description: 'Apartment Rent', amount: -1500 },
-        { id: '3', date: '2024-02-05', description: 'Grocery Store', amount: -150 },
-        { id: '4', date: '2024-02-10', description: 'Gas Station', amount: -50 },
-        { id: '5', date: '2024-02-15', description: 'Electric Bill', amount: -100 },
-      ]);
-    }, 500);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
-  const startAnalysis = async () => {
-    setIsExecuting(true);
-    setCurrentPage('execution');
-    clearAgentLogs();
-    
-    // Simulate workflow execution
-    const states = ['INIT', 'INGEST', 'CATEGORIZE', 'ANALYZE', 'BUDGET', 'EVALUATE', 'COMPLETE'];
-    
-    for (let i = 0; i < states.length; i++) {
-      const state = states[i] as any;
-      
-      // Update workflow steps
-      const steps = workflowSteps.map((step, idx) => ({
-        ...step,
-        completed: idx < i,
-        running: idx === i,
-      }));
-      setWorkflowSteps(steps);
-      setCurrentAgentState(state);
-      
-      // Add log entry
-      addAgentLog({
-        id: `log-${i}`,
-        timestamp: new Date().toISOString(),
-        agent: state.toLowerCase(),
-        action: `Executing ${state}`,
-        duration: Math.floor(Math.random() * 500) + 100,
-        tokens: state === 'CATEGORIZE' || state === 'BUDGET' ? Math.floor(Math.random() * 500) + 300 : 0,
-        cost: state === 'CATEGORIZE' || state === 'BUDGET' ? parseFloat((Math.random() * 0.001).toFixed(6)) : 0,
-        details: `${state} step completed successfully`,
-      });
-      
-      await new Promise(resolve => setTimeout(resolve, 800));
+  const handleStartAnalysis = async () => {
+    if (!currentSessionId) {
+      console.error('No session ID');
+      return;
     }
-    
-    setIsExecuting(false);
+    await startExecution(currentSessionId);
   };
 
   return (
@@ -269,12 +257,20 @@ export function UploadSession() {
         {/* Start Button */}
         <div className="mt-6 flex justify-end">
           <button
-            onClick={startAnalysis}
-            disabled={!uploadValidation?.valid || isExecuting}
+            onClick={handleStartAnalysis}
+            disabled={!uploadValidation?.valid || isExecuting || isUploading || !currentSessionId}
             className="btn-primary flex items-center gap-2"
           >
-            Start Analysis
-            <ArrowRight className="w-5 h-5" />
+            {isUploading ? (
+              <>Processing...</>
+            ) : isExecuting ? (
+              <>Running...</>
+            ) : (
+              <>
+                Start Analysis
+                <ArrowRight className="w-5 h-5" />
+              </>
+            )}
           </button>
         </div>
       </div>

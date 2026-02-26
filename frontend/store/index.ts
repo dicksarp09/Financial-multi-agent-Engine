@@ -235,7 +235,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await api.validateFile(file);
       set({ 
-        uploadValidation: { valid: result.valid, errors: result.errors, totalCount: result.totalCount },
+        uploadValidation: { valid: result.valid, errors: result.errors || [], totalCount: result.totalCount },
         uploadedTransactions: result.transactions || []
       });
     } catch (e) {
@@ -247,7 +247,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   
   // Actions
   startExecution: async (sessionId) => {
-    const { loadWorkflow, loadExecutionLogs, loadApproval, setIsExecuting, setCurrentPage } = get();
+    const { loadWorkflow, loadExecutionLogs, loadApproval, loadReport, setIsExecuting, setCurrentPage } = get();
     setIsExecuting(true);
     setCurrentPage('execution');
     
@@ -264,9 +264,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         const running = workflowSteps.some(s => s.running);
         const complete = workflowSteps.some(s => s.completed && s.state === 'COMPLETE');
         
+        if (complete) {
+          await loadReport(sessionId);
+        }
+        
         if (!running && !pendingApproval) {
           clearInterval(pollInterval);
           setIsExecuting(false);
+          if (complete) {
+            await loadReport(sessionId);
+          }
         }
       }, 1000);
       

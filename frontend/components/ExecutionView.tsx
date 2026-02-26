@@ -22,9 +22,13 @@ export function ExecutionView() {
     totalTokens, 
     totalCost,
     setCurrentPage,
+    currentReport,
     setCurrentReport,
     pendingApproval,
-    setPendingApproval
+    setPendingApproval,
+    currentSessionId,
+    approveRequest,
+    rejectRequest
   } = useAppStore();
 
   const getStepIcon = (step: typeof workflowSteps[0]) => {
@@ -49,34 +53,9 @@ export function ExecutionView() {
   const isComplete = workflowSteps.some(s => s.completed && s.state === 'COMPLETE');
 
   const viewReport = () => {
-    setCurrentReport({
-      sessionId: 'sess-new',
-      version: 1,
-      totalIncome: 11000,
-      totalExpenses: 5010,
-      savingsRate: 54.5,
-      riskScore: 0.3,
-      categoryBreakdown: [
-        { category: 'Housing', amount: 3000, percent: 27.3 },
-        { category: 'Food', amount: 775, percent: 7.0 },
-        { category: 'Transportation', amount: 235, percent: 2.1 },
-        { category: 'Utilities', amount: 200, percent: 1.8 },
-        { category: 'Entertainment', amount: 55, percent: 0.5 },
-        { category: 'Shopping', amount: 200, percent: 1.8 },
-        { category: 'Other', amount: 545, percent: 5.0 },
-      ],
-      anomalies: [
-        { id: '1', transactionId: 'txn_002', description: 'Apartment Rent', amount: -1500, reason: 'IQR outlier: amount 1500.00 exceeds upper bound 432.50', riskScore: 1.0, severity: 'critical' },
-        { id: '2', transactionId: 'txn_005', description: 'Cash Advance', amount: -500, reason: 'IQR outlier: amount 500.00 exceeds upper bound 432.50', riskScore: 0.16, severity: 'low' },
-      ],
-      budgetRecommendations: [
-        { category: 'Housing', currentAmount: 3000, suggestedAmount: 2750, rationale: 'Current spending 3000.00 exceeds recommended 2750.00 (25% of income)', impact: '-$250' },
-        { category: 'Food', currentAmount: 775, suggestedAmount: 1320, rationale: 'Current spending 775.00 is below recommended 1320.00', impact: '+$545' },
-      ],
-      executionTrace: agentLogs,
-      createdAt: new Date().toISOString(),
-    });
-    setCurrentPage('report');
+    if (currentReport) {
+      setCurrentPage('report');
+    }
   };
 
   // Simulate approval request after CATEGORIZE
@@ -144,7 +123,8 @@ export function ExecutionView() {
             {isComplete && (
               <button
                 onClick={viewReport}
-                className="btn-primary w-full mt-4 flex items-center justify-center gap-2"
+                disabled={!currentReport}
+                className="btn-primary w-full mt-4 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 View Report
                 <ArrowRight className="w-4 h-4" />
@@ -277,13 +257,13 @@ export function ExecutionView() {
 
             <div className="flex gap-3">
               <button
-                onClick={() => setPendingApproval(null)}
+                onClick={() => currentSessionId && rejectRequest(currentSessionId)}
                 className="flex-1 btn-secondary"
               >
                 Reject
               </button>
               <button
-                onClick={() => setPendingApproval(null)}
+                onClick={() => currentSessionId && approveRequest(currentSessionId)}
                 className="flex-1 btn-primary"
               >
                 Approve

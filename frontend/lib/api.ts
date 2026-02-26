@@ -50,11 +50,15 @@ export async function createSession() {
 }
 
 // Upload
-export async function validateFile(file: File) {
+export async function validateFile(file: File, sessionId?: string): Promise<{valid: boolean; errors?: string[]; transactions?: any[]; totalCount?: number}> {
   const formData = new FormData();
   formData.append('file', file);
   
-  const response = await fetch(`${API_BASE}/upload/validate`, {
+  const url = sessionId 
+    ? `${API_BASE}/upload/validate?session_id=${sessionId}`
+    : `${API_BASE}/upload/validate`;
+  
+  const response = await fetch(url, {
     method: 'POST',
     body: formData,
   });
@@ -110,5 +114,18 @@ export async function sendMessage(sessionId: string, message: string) {
   return fetchJSON(`${API_BASE}/conversation/${sessionId}`, {
     method: 'POST',
     body: JSON.stringify({ message }),
+  });
+}
+
+// Suggestions
+export async function getSuggestions(sessionId: string) {
+  return fetchJSON(`${API_BASE}/suggestions/${sessionId}`);
+}
+
+// Simulation
+export async function runSimulation(sessionId: string, simulation: { type: string; params: Record<string, any> }) {
+  return fetchJSON(`${API_BASE}/simulation/${sessionId}`, {
+    method: 'POST',
+    body: JSON.stringify(simulation),
   });
 }

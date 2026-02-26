@@ -11,6 +11,7 @@ from agents.budgeting_agent import BudgetingAgent
 from agents.evaluation_agent import EvaluationAgent
 from agents.reporting_agent import ReportingAgent
 from agents.retrieval_agent import RetrievalAgent
+from agents.conversation_agent import ConversationAgent
 
 from security.privilege_model import (
     get_privilege_model,
@@ -53,6 +54,7 @@ class WorkflowState(Enum):
     BUDGET = "BUDGET"
     EVALUATE = "EVALUATE"
     REPORT = "REPORT"
+    REFINE = "REFINE"
     WAITING_APPROVAL = "WAITING_APPROVAL"
     COMPLETE = "COMPLETE"
 
@@ -64,8 +66,9 @@ VALID_TRANSITIONS = {
     WorkflowState.ANALYZE: [WorkflowState.BUDGET],
     WorkflowState.BUDGET: [WorkflowState.EVALUATE],
     WorkflowState.EVALUATE: [WorkflowState.REPORT, WorkflowState.WAITING_APPROVAL],
+    WorkflowState.REPORT: [WorkflowState.REFINE, WorkflowState.COMPLETE],
+    WorkflowState.REFINE: [WorkflowState.REFINE, WorkflowState.COMPLETE],
     WorkflowState.WAITING_APPROVAL: [WorkflowState.REPORT],
-    WorkflowState.REPORT: [WorkflowState.COMPLETE],
     WorkflowState.COMPLETE: [],
 }
 
@@ -117,6 +120,7 @@ class Orchestrator:
             "evaluation": EvaluationAgent(),
             "reporting": ReportingAgent(),
             "retrieval": RetrievalAgent(),
+            "conversation": ConversationAgent(),
         }
 
         self.state = WorkflowState.INIT
@@ -167,6 +171,7 @@ class Orchestrator:
             WorkflowState.BUDGET: "budgeting",
             WorkflowState.EVALUATE: "evaluation",
             WorkflowState.REPORT: "reporting",
+            WorkflowState.REFINE: "conversation",
         }
         return state_to_agent.get(state, "")
 
@@ -447,6 +452,12 @@ class Orchestrator:
                 elif current_state == WorkflowState.REPORT:
                     self.context["report"] = output
 
+                elif current_state == WorkflowState.REFINE:
+                    self.context["refine_output"] = output
+                    # Update report with refined data if metrics changed
+                    if output.get("updated_metrics"):
+                        self.context["report"].update(output.get("updated_metrics", {}))
+
                 next_state = VALID_TRANSITIONS.get(
                     current_state, [WorkflowState.COMPLETE]
                 )[0]
@@ -555,6 +566,89 @@ def resume_from_approval(
         iterations=0,
         success=True,
     )
+
+
+def refine_session(
+    session_id: str,
+    message: str,
+    report: Dict[str, Any],
+    transactions: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Handle conversational refinement request.
+
+    This integrates with the conversation agent to process
+    natural language commands and update the report.
+
+    Args:
+        session_id: Current session ID
+        message: Natural language command
+        report: Current report data
+        transactions: Optional list of transactions
+
+    Returns:
+        Dict with agent response including message, action, suggestions, updated_metrics
+    """
+    conversation_agent = get_conversation_agent()
+
+    input_data = {
+        "message": message,
+        "report": report,
+        "transactions": transactions or [],
+    }
+
+    result = conversation_agent.execute(session_id, input_data)
+
+    log_event(
+        session_id=session_id,
+        state=WorkflowState.REFINE.value,
+        agent_name="conversation",
+        input_payload={"message": message},
+        output_payload=result,
+        error_flag=result.get("action") == "error",
+    )
+
+    return result
+
+
+def run_whatif_simulation(
+    session_id: str,
+    simulation_type: str,
+    params: Dict[str, Any],
+    report: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Run a what-if simulation without modifying the report.
+
+    Args:
+        session_id: Current session ID
+        simulation_type: Type of simulation (reduce_category, reduce_income, etc.)
+        params: Simulation parameters
+        report: Current report data
+
+    Returns:
+        Dict with simulation results
+    """
+    conversation_agent = get_conversation_agent()
+
+    # Build message from simulation params
+    message = ""
+    if simulation_type == "reduce_category":
+        message = (
+            f"What if I spend ${params.get('amount')} less on {params.get('category')}?"
+        )
+    elif simulation_type == "reduce_income":
+        message = f"What if my income drops {params.get('percentage')}%?"
+    elif simulation_type == "increase_category":
+        message = (
+            f"What if I increase {params.get('category')} by ${params.get('amount')}?"
+        )
+
+    input_data = {"message": message, "report": report, "transactions": []}
+
+    result = conversation_agent.execute(session_id, input_data)
+
+    return result.get("simulation", {})
 
 
 class ApprovalException(Exception):

@@ -10,6 +10,7 @@ from datetime import datetime
 import uuid
 import json
 import asyncio
+import re
 from enum import Enum
 
 app = FastAPI(title="Financial Agent API", version="1.0.0")
@@ -164,6 +165,7 @@ reports_db: Dict[str, ReportData] = {}
 workflow_state: Dict[str, List[WorkflowStep]] = {}
 execution_logs: Dict[str, List[AgentLog]] = {}
 current_approvals: Dict[str, ApprovalRequest] = {}
+transactions_db: Dict[str, List[Transaction]] = {}
 system_status = SystemStatus(
     agentHealth="healthy",
     llmAvailable=True,
@@ -193,7 +195,7 @@ def init_sample_data():
             totalIncome=10500, totalExpenses=4800, savingsRate=54.3
         ),
         Session(
-            id="sess-003", date="2024-02-22", status=SessionStatus.AWAITING_APPROVAL,
+            id="sess-003", date="2024-02-22", status=SessionStatus.COMPLETE,
             anomaliesCount=3, budgetChangePercent=12.5, version=1, riskScore=0.8,
             totalIncome=11000, totalExpenses=5200, savingsRate=52.7
         ),
@@ -268,7 +270,7 @@ async def create_session():
 
 # File Upload & Validation
 @app.post("/api/upload/validate")
-async def validate_file(file: UploadFile = File(...)):
+async def validate_file(file: UploadFile = File(...), session_id: Optional[str] = None):
     content = await file.read()
     
     try:
@@ -308,6 +310,11 @@ async def validate_file(file: UploadFile = File(...)):
         if errors and not transactions:
             return {"valid": False, "errors": errors}
         
+        # Store transactions if session_id provided
+        if session_id:
+            transactions_db[session_id] = transactions
+            print(f"[DEBUG] validate_file: stored {len(transactions)} transactions for session_id={session_id}")
+        
         return {
             "valid": True,
             "transactions": [t.model_dump() for t in transactions[:10]],
@@ -344,6 +351,10 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
     
     execution_logs[session_id] = []
     
+    # Get transactions for this session
+    transactions = transactions_db.get(session_id, [])
+    print(f"[DEBUG] execute_workflow: session_id={session_id}, transactions_count={len(transactions)}")
+    
     # Run workflow in background
     async def run_workflow():
         states = [
@@ -356,6 +367,13 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
             (AgentState.COMPLETE, "Complete"),
         ]
         
+        # Processing state
+        categorized_txns = []
+        anomalies_detected = []
+        total_income = 0.0
+        total_expenses = 0.0
+        category_totals = {}
+        
         for idx, (state, label) in enumerate(states):
             # Update workflow state
             for i, step in enumerate(workflow_state[session_id]):
@@ -363,12 +381,80 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
                 step.running = i == idx
                 step.error = False
             
-            # Add log entry
+            # Add log entry with real data
             tokens = 0
             cost = 0.0
-            if state in [AgentState.CATEGORIZE, AgentState.BUDGET]:
+            details = f"{label} step completed successfully"
+            
+            if state == AgentState.INGEST:
+                details = f"Ingested {len(transactions)} transactions"
+            
+            elif state == AgentState.CATEGORIZE:
                 tokens = 400
                 cost = 0.0002
+                # Categorize transactions based on description keywords
+                category_keywords = {
+                    "Housing": ["rent", "mortgage", "housing"],
+                    "Food": ["grocery", "restaurant", "food", "coffee", "cafe", "supermarket"],
+                    "Transportation": ["gas", "fuel", "uber", "lyft", "car", "transport"],
+                    "Utilities": ["electric", "water", "internet", "phone", "utility"],
+                    "Entertainment": ["netflix", "spotify", "movie", "concert", "entertainment"],
+                    "Healthcare": ["doctor", "pharmacy", "medical", "health", "dentist"],
+                    "Shopping": ["amazon", "shopping", "clothing", "gift"],
+                    "Insurance": ["insurance", "policy"],
+                    "Fitness": ["gym", "fitness"],
+                    "Income": ["salary", "bonus", "freelance", "consulting", "deposit"],
+                }
+                
+                for txn in transactions:
+                    category = "Other"
+                    for cat, keywords in category_keywords.items():
+                        if any(kw in txn.description.lower() for kw in keywords):
+                            category = cat
+                            break
+                    
+                    # Override if user provided category
+                    if txn.category:
+                        category = txn.category
+                    
+                    txn.category = category
+                    categorized_txns.append(txn)
+                    
+                    if txn.amount > 0:
+                        total_income += txn.amount
+                    else:
+                        total_expenses += abs(txn.amount)
+                    
+                    category_totals[category] = category_totals.get(category, 0) + txn.amount
+                
+                details = f"Categorized {len(categorized_txns)} transactions into {len(category_totals)} categories"
+            
+            elif state == AgentState.ANALYZE:
+                # Detect anomalies (transactions > 3x average expense or > 50% of income)
+                avg_expense = total_expenses / len(transactions) if transactions else 0
+                for txn in categorized_txns:
+                    if txn.amount < 0:
+                        abs_amount = abs(txn.amount)
+                        if abs_amount > avg_expense * 3 or abs_amount > total_income * 0.3:
+                            risk_score = min(1.0, abs_amount / total_income)
+                            anomalies_detected.append({
+                                "id": txn.id,
+                                "transactionId": txn.id,
+                                "description": txn.description,
+                                "amount": txn.amount,
+                                "reason": f"Unusual transaction amount: ${abs_amount:.2f}",
+                                "riskScore": risk_score,
+                                "severity": "high" if risk_score > 0.5 else "medium"
+                            })
+                            txn.isAnomaly = True
+                            txn.riskScore = risk_score
+                
+                details = f"Analysis complete: ${total_income:.2f} income, ${total_expenses:.2f} expenses, {len(anomalies_detected)} anomalies"
+            
+            elif state == AgentState.BUDGET:
+                tokens = 400
+                cost = 0.0002
+                details = f"Generated budget recommendations based on {len(category_totals)} categories"
             
             log = AgentLog(
                 id=f"log-{idx}",
@@ -378,39 +464,41 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
                 duration=350,
                 tokens=tokens,
                 cost=cost,
-                details=f"{label} step completed successfully"
+                details=details
             )
             execution_logs[session_id].append(log)
             
-            # Check for anomaly in CATEGORIZE
-            if state == AgentState.CATEGORIZE:
-                approval = ApprovalRequest(
-                    id=f"approval-{uuid.uuid4().hex[:8]}",
-                    type="ANOMALY_DETECTED",
-                    description="Large anomaly detected: 1,200 transaction",
-                    amount=-1200.0,
-                    riskScore=0.85,
-                    status="PENDING",
-                    requestedAt=datetime.utcnow().isoformat()
-                )
-                current_approvals[session_id] = approval
-                
-                # Set to waiting approval
-                for step in workflow_state[session_id]:
-                    if step.state == AgentState.CATEGORIZE:
-                        step.completed = True
-                        step.running = False
-                    elif step.state == AgentState.WAITING_APPROVAL:
-                        step.running = True
-                
-                # Add waiting approval step if not exists
-                if not any(s.state == AgentState.WAITING_APPROVAL for s in workflow_state[session_id]):
-                    workflow_state[session_id].insert(
-                        idx + 1,
-                        WorkflowStep(state=AgentState.WAITING_APPROVAL, label="Awaiting Approval", completed=False, running=True)
+            # Check for anomaly in CATEGORIZE - trigger approval for high-risk anomalies
+            if state == AgentState.CATEGORIZE and anomalies_detected:
+                high_risk = [a for a in anomalies_detected if a["riskScore"] > 0.5]
+                if high_risk:
+                    approval = ApprovalRequest(
+                        id=f"approval-{uuid.uuid4().hex[:8]}",
+                        type="ANOMALY_DETECTED",
+                        description=f"High-risk anomaly detected: {high_risk[0]['description']}",
+                        amount=high_risk[0]["amount"],
+                        riskScore=high_risk[0]["riskScore"],
+                        status="PENDING",
+                        requestedAt=datetime.utcnow().isoformat()
                     )
-                
-                return  # Stop here until approved
+                    current_approvals[session_id] = approval
+                    
+                    # Set to waiting approval
+                    for step in workflow_state[session_id]:
+                        if step.state == AgentState.CATEGORIZE:
+                            step.completed = True
+                            step.running = False
+                        elif step.state == AgentState.WAITING_APPROVAL:
+                            step.running = True
+                    
+                    # Add waiting approval step if not exists
+                    if not any(s.state == AgentState.WAITING_APPROVAL for s in workflow_state[session_id]):
+                        workflow_state[session_id].insert(
+                            idx + 1,
+                            WorkflowStep(state=AgentState.WAITING_APPROVAL, label="Awaiting Approval", completed=False, running=True)
+                        )
+                    
+                    return  # Stop here until approved
             
             await asyncio.sleep(0.8)
         
@@ -419,12 +507,59 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
             step.completed = step.state != AgentState.WAITING_APPROVAL
             step.running = False
         
+        # Compute savings rate
+        savings_rate = ((total_income - total_expenses) / total_income * 100) if total_income > 0 else 0
+        
         # Update session status
         if session_id in sessions_db:
             sessions_db[session_id].status = SessionStatus.COMPLETE
-            sessions_db[session_id].totalIncome = 11000
-            sessions_db[session_id].totalExpenses = 5010
-            sessions_db[session_id].savingsRate = 54.5
+            sessions_db[session_id].totalIncome = total_income
+            sessions_db[session_id].totalExpenses = total_expenses
+            sessions_db[session_id].savingsRate = savings_rate
+            sessions_db[session_id].anomaliesCount = len(anomalies_detected)
+        
+        # Generate report
+        category_breakdown = []
+        for cat, amount in category_totals.items():
+            if amount < 0:
+                category_breakdown.append(CategoryBreakdown(
+                    category=cat,
+                    amount=abs(amount),
+                    percent=round(abs(amount) / total_expenses * 100, 1) if total_expenses > 0 else 0
+                ))
+        
+        # Budget recommendations
+        budget_recommendations = []
+        for cat, amount in category_totals.items():
+            if amount < 0:
+                suggested = abs(amount) * 0.9  # Suggest 10% reduction
+                budget_recommendations.append(BudgetRecommendation(
+                    category=cat,
+                    currentAmount=abs(amount),
+                    suggestedAmount=suggested,
+                    rationale=f"Current spending ${abs(amount):.2f} - recommend ${suggested:.2f} (10% reduction)",
+                    impact=f"-${abs(amount) - suggested:.2f}"
+                ))
+        
+        # Create report
+        report = ReportData(
+            sessionId=session_id,
+            version=1,
+            totalIncome=total_income,
+            totalExpenses=total_expenses,
+            savingsRate=savings_rate,
+            riskScore=sum(a["riskScore"] for a in anomalies_detected) / len(anomalies_detected) if anomalies_detected else 0,
+            categoryBreakdown=category_breakdown,
+            anomalies=[Anomaly(**a) for a in anomalies_detected],
+            budgetRecommendations=budget_recommendations,
+            executionTrace=execution_logs.get(session_id, []),
+            createdAt=datetime.utcnow().isoformat()
+        )
+        reports_db[session_id] = report
+        
+        # Clear approval after completion
+        if session_id in current_approvals:
+            del current_approvals[session_id]
         
         system_status.activeSessions = max(0, system_status.activeSessions - 1)
     
@@ -458,6 +593,63 @@ async def respond_to_approval(session_id: str, action: str):
         
         # Resume workflow
         async def resume_workflow():
+            # Get transactions
+            transactions = transactions_db.get(session_id, [])
+            
+            # Re-process to get totals (same logic as before)
+            category_keywords = {
+                "Housing": ["rent", "mortgage", "housing"],
+                "Food": ["grocery", "restaurant", "food", "coffee", "cafe", "supermarket"],
+                "Transportation": ["gas", "fuel", "uber", "lyft", "car", "transport"],
+                "Utilities": ["electric", "water", "internet", "phone", "utility"],
+                "Entertainment": ["netflix", "spotify", "movie", "concert", "entertainment"],
+                "Healthcare": ["doctor", "pharmacy", "medical", "health", "dentist"],
+                "Shopping": ["amazon", "shopping", "clothing", "gift"],
+                "Insurance": ["insurance", "policy"],
+                "Fitness": ["gym", "fitness"],
+                "Income": ["salary", "bonus", "freelance", "consulting", "deposit"],
+            }
+            
+            categorized_txns = []
+            total_income = 0.0
+            total_expenses = 0.0
+            category_totals = {}
+            anomalies_detected = []
+            
+            for txn in transactions:
+                category = "Other"
+                for cat, keywords in category_keywords.items():
+                    if any(kw in txn.description.lower() for kw in keywords):
+                        category = cat
+                        break
+                if txn.category:
+                    category = txn.category
+                txn.category = category
+                categorized_txns.append(txn)
+                
+                if txn.amount > 0:
+                    total_income += txn.amount
+                else:
+                    total_expenses += abs(txn.amount)
+                category_totals[category] = category_totals.get(category, 0) + txn.amount
+            
+            # Detect anomalies
+            avg_expense = total_expenses / len(transactions) if transactions else 0
+            for txn in categorized_txns:
+                if txn.amount < 0:
+                    abs_amount = abs(txn.amount)
+                    if abs_amount > avg_expense * 3 or abs_amount > total_income * 0.3:
+                        risk_score = min(1.0, abs_amount / total_income)
+                        anomalies_detected.append({
+                            "id": txn.id,
+                            "transactionId": txn.id,
+                            "description": txn.description,
+                            "amount": txn.amount,
+                            "reason": f"Unusual transaction amount: ${abs_amount:.2f}",
+                            "riskScore": risk_score,
+                            "severity": "high" if risk_score > 0.5 else "medium"
+                        })
+            
             states = [
                 (AgentState.ANALYZE, "Analyze"),
                 (AgentState.BUDGET, "Budget"),
@@ -480,9 +672,14 @@ async def respond_to_approval(session_id: str, action: str):
                 
                 tokens = 0
                 cost = 0.0
-                if state in [AgentState.BUDGET]:
+                details = f"{label} step completed successfully"
+                
+                if state == AgentState.ANALYZE:
+                    details = f"Analysis complete: ${total_income:.2f} income, ${total_expenses:.2f} expenses, {len(anomalies_detected)} anomalies"
+                elif state == AgentState.BUDGET:
                     tokens = 400
                     cost = 0.0002
+                    details = f"Generated budget recommendations based on {len(category_totals)} categories"
                 
                 log = AgentLog(
                     id=f"log-resume-{idx}",
@@ -492,18 +689,71 @@ async def respond_to_approval(session_id: str, action: str):
                     duration=350,
                     tokens=tokens,
                     cost=cost,
-                    details=f"{label} step completed successfully"
+                    details=details
                 )
                 execution_logs[session_id].append(log)
                 await asyncio.sleep(0.8)
-            
             # Mark complete
             for step in workflow_state[session_id]:
                 step.completed = True
                 step.running = False
             
+            # Compute savings rate
+            savings_rate = ((total_income - total_expenses) / total_income * 100) if total_income > 0 else 0
+            
+            print(f"[DEBUG] Report: total_income={total_income}, total_expenses={total_expenses}, savings_rate={savings_rate}")
+            print(f"[DEBUG] Category totals: {category_totals}")
+            
+            # Update session status
             if session_id in sessions_db:
                 sessions_db[session_id].status = SessionStatus.COMPLETE
+                sessions_db[session_id].totalIncome = total_income
+                sessions_db[session_id].totalExpenses = total_expenses
+                sessions_db[session_id].savingsRate = savings_rate
+                sessions_db[session_id].anomaliesCount = len(anomalies_detected)
+            
+            # Generate report
+            category_breakdown = []
+            for cat, amount in category_totals.items():
+                if amount < 0:
+                    category_breakdown.append(CategoryBreakdown(
+                        category=cat,
+                        amount=abs(amount),
+                        percent=round(abs(amount) / total_expenses * 100, 1) if total_expenses > 0 else 0
+                    ))
+            
+            # Budget recommendations
+            budget_recommendations = []
+            for cat, amount in category_totals.items():
+                if amount < 0:
+                    suggested = abs(amount) * 0.9
+                    budget_recommendations.append(BudgetRecommendation(
+                        category=cat,
+                        currentAmount=abs(amount),
+                        suggestedAmount=suggested,
+                        rationale=f"Current spending ${abs(amount):.2f} - recommend ${suggested:.2f} (10% reduction)",
+                        impact=f"-${abs(amount) - suggested:.2f}"
+                    ))
+            
+            # Create report
+            report = ReportData(
+                sessionId=session_id,
+                version=1,
+                totalIncome=total_income,
+                totalExpenses=total_expenses,
+                savingsRate=savings_rate,
+                riskScore=sum(a["riskScore"] for a in anomalies_detected) / len(anomalies_detected) if anomalies_detected else 0,
+                categoryBreakdown=category_breakdown,
+                anomalies=[Anomaly(**a) for a in anomalies_detected],
+                budgetRecommendations=budget_recommendations,
+                executionTrace=execution_logs.get(session_id, []),
+                createdAt=datetime.utcnow().isoformat()
+            )
+            reports_db[session_id] = report
+            
+            # Clear approval after completion
+            if session_id in current_approvals:
+                del current_approvals[session_id]
             
             system_status.activeSessions = max(0, system_status.activeSessions - 1)
         
@@ -513,6 +763,9 @@ async def respond_to_approval(session_id: str, action: str):
         approval.status = "REJECTED"
         if session_id in sessions_db:
             sessions_db[session_id].status = SessionStatus.FAILED
+        # Clear approval after reject
+        if session_id in current_approvals:
+            del current_approvals[session_id]
         system_status.activeSessions = max(0, system_status.activeSessions - 1)
     
     return {"status": approval.status, "approval": approval}
@@ -521,6 +774,8 @@ async def respond_to_approval(session_id: str, action: str):
 # Reports
 @app.get("/api/reports/{session_id}", response_model=ReportData)
 async def get_report(session_id: str):
+    print(f"[DEBUG] get_report: session_id={session_id}, reports_db_keys={list(reports_db.keys())}")
+    
     if session_id not in reports_db:
         # Generate a sample report
         report = ReportData(
@@ -625,36 +880,518 @@ async def export_report(session_id: str, format: str = "json"):
         raise HTTPException(status_code=400, detail="Unsupported format")
 
 
-# Conversation
+# Conversation / NLP Processing using Agent Architecture
 @app.post("/api/conversation/{session_id}")
 async def send_message(session_id: str, message: str):
-    """Process conversational refinement"""
+    """Process conversational refinement using the agent architecture"""
     
-    # Simple intent parsing
+    # Import from orchestrator
+    try:
+        from orchestrator import refine_session
+    except ImportError as e:
+        # Fallback to simple NLP if orchestrator not available
+        print(f"Warning: Could not import orchestrator: {e}")
+        return await send_message_fallback(session_id, message)
+    
+    # Get current report and transactions
+    transactions = transactions_db.get(session_id, [])
+    report = reports_db.get(session_id)
+    
+    if not report:
+        return {
+            "message": "Please run the analysis first before using conversational refinement.",
+            "action": "error",
+            "details": {},
+            "suggestions": ["Upload a CSV and run analysis first"],
+            "updatedMetrics": {}
+        }
+    
+    # Convert report to dict format expected by agent
+    report_dict = {
+        "total_income": report.totalIncome,
+        "total_expenses": report.totalExpenses,
+        "savings_rate": report.savingsRate,
+        "risk_score": report.riskScore,
+        "category_breakdown": [
+            {"category": c.category, "amount": c.amount, "percent": c.percent}
+            for c in report.categoryBreakdown
+        ],
+        "budget_recommendations": [
+            {
+                "category": b.category,
+                "current_amount": b.currentAmount,
+                "suggested_amount": b.suggestedAmount,
+                "rationale": b.rationale,
+                "impact": b.impact
+            }
+            for b in report.budgetRecommendations
+        ]
+    }
+    
+    transactions_list = [
+        {"id": t.id, "date": t.date, "description": t.description, "amount": t.amount, "category": t.category}
+        for t in transactions
+    ]
+    
+    try:
+        # Use the agent architecture
+        result = refine_session(
+            session_id=session_id,
+            message=message,
+            report=report_dict,
+            transactions=transactions_list
+        )
+        
+        # Update report if metrics changed
+        if result.get("updated_metrics"):
+            updated = result["updated_metrics"]
+            if "total_income" in updated:
+                report.totalIncome = updated["total_income"]
+            if "total_expenses" in updated:
+                report.totalExpenses = updated["total_expenses"]
+            if "savings_rate" in updated:
+                report.savingsRate = updated["savings_rate"]
+            reports_db[session_id] = report
+        
+        return {
+            "message": result.get("message", ""),
+            "action": result.get("action", ""),
+            "details": result.get("details", {}),
+            "suggestions": result.get("suggestions", []),
+            "updatedMetrics": result.get("updated_metrics", {})
+        }
+        
+    except Exception as e:
+        print(f"Error in conversation agent: {e}")
+        return await send_message_fallback(session_id, message)
+
+
+async def send_message_fallback(session_id: str, message: str):
+    """Fallback simple NLP processing if agent not available"""
+    
+    report = reports_db.get(session_id)
+    
     response = {
         "message": "",
         "action": None,
-        "details": {}
+        "details": {},
+        "suggestions": [],
+        "updatedMetrics": {}
     }
     
     message_lower = message.lower()
     
-    if "increase" in message_lower and "food" in message_lower:
-        response["message"] = "I'll increase your food budget by 10%."
-        response["action"] = "adjust_budget"
-        response["details"] = {"category": "food", "adjustment": 0.1}
-    elif "reduce" in message_lower and "entertainment" in message_lower:
-        response["message"] = "I'll reduce your entertainment budget."
-        response["action"] = "adjust_budget"
-        response["details"] = {"category": "entertainment", "adjustment": -0.1}
-    elif "what if" in message_lower and "income" in message_lower:
-        response["message"] = "If your income drops by 15%, your savings rate would decrease from 54.5% to approximately 39.5%."
-        response["action"] = "scenario_analysis"
+    # Simple fallback logic
+    if "save" in message_lower and "%" in message:
+        response["message"] = "Please run analysis first to use this feature."
+        response["action"] = "error"
+    elif "what if" in message_lower:
+        response["message"] = "What-if simulations require an active session."
+        response["action"] = "error"
     else:
-        response["message"] = "I understand. Let me process that request."
+        response["message"] = "I understand. Please run the analysis first."
         response["action"] = "general"
     
     return response
+    
+    message_lower = message.lower()
+    
+    # === COMMAND: Save X% of income ===
+    if "save" in message_lower and ("%" in message or "percent" in message_lower):
+        match = re.search(r'(\d+)\s*%', message)
+        if match:
+            target_savings = int(match.group(1))
+            if report:
+                current_income = report.totalIncome
+                current_expenses = report.totalExpenses
+                current_savings = current_income - current_expenses
+                target_savings_amount = current_income * (target_savings / 100)
+                adjustment_needed = target_savings_amount - current_savings
+                
+                if adjustment_needed > 0:
+                    # Need to reduce expenses
+                    reduction_needed = adjustment_needed
+                    # Proportionally reduce non-essential categories
+                    non_essential = ["Entertainment", "Shopping", "Food", "Transportation", "Fitness"]
+                    new_budget = []
+                    for rec in report.budgetRecommendations:
+                        if rec.category in non_essential and reduction_needed > 0:
+                            reduction = min(rec.suggestedAmount * 0.3, reduction_needed)  # Reduce up to 30%
+                            new_amount = rec.suggestedAmount - reduction
+                            reduction_needed -= reduction
+                            new_budget.append({
+                                "category": rec.category,
+                                "previousAmount": rec.suggestedAmount,
+                                "newAmount": max(0, new_amount),
+                                "reduction": reduction
+                            })
+                    
+                    new_savings_rate = (current_income - (current_expenses - (adjustment_needed - reduction_needed))) / current_income * 100
+                    
+                    response["message"] = f"Done. I've adjusted your budget to save {target_savings}%. Your projected savings is now {new_savings_rate:.1f}% (was {report.savingsRate:.1f}%)."
+                    response["action"] = "adjust_savings"
+                    response["details"] = {
+                        "targetSavings": target_savings,
+                        "newSavingsRate": new_savings_rate,
+                        "budgetChanges": new_budget
+                    }
+                    response["updatedMetrics"] = {
+                        "savingsRate": new_savings_rate
+                    }
+                else:
+                    response["message"] = f"You're already saving {report.savingsRate:.1f}%, which exceeds your {target_savings}% target!"
+                    response["action"] = "info"
+            else:
+                response["message"] = "Please run the analysis first before adjusting savings."
+                response["action"] = "error"
+    
+    # === COMMAND: Ignore specific transaction ===
+    elif "ignore" in message_lower:
+        # Look for amount or description
+        amount_match = re.search(r'\$?(\d+(?:\.\d+)?)', message)
+        
+        if report and amount_match:
+            ignore_amount = float(amount_match.group(1))
+            # Find matching transaction in categories
+            for cat in report.categoryBreakdown:
+                if abs(cat.amount - ignore_amount) < 10:
+                    new_expenses = report.totalExpenses - cat.amount
+                    new_savings = (report.totalIncome - new_expenses) / report.totalIncome * 100
+                    
+                    response["message"] = f"I've excluded the ${cat.amount:.2f} {cat.category} charge. Your expenses are now ${new_expenses:.2f} and savings rate is {new_savings:.1f}%."
+                    response["action"] = "exclude_transaction"
+                    response["details"] = {
+                        "excludedCategory": cat.category,
+                        "excludedAmount": cat.amount,
+                        "newTotalExpenses": new_expenses,
+                        "newSavingsRate": new_savings
+                    }
+                    response["updatedMetrics"] = {
+                        "totalExpenses": new_expenses,
+                        "savingsRate": new_savings
+                    }
+                    break
+        else:
+            response["message"] = "Which transaction would you like to ignore? Please specify the amount (e.g., 'Ignore the $500 charge')."
+            response["action"] = "clarify"
+    
+    # === COMMAND: What-if scenario ===
+    elif "what if" in message_lower or "simulate" in message_lower or "what happens" in message_lower:
+        if not report:
+            response["message"] = "Please run the analysis first."
+            response["action"] = "error"
+        else:
+            # Parse what-if scenarios
+            scenario_details = {}
+            
+            # "spend $X less on rent"
+            less_match = re.search(r'\$(\d+)\s*less\s*on\s*(\w+)', message_lower)
+            if less_match:
+                amount = float(less_match.group(1))
+                category = less_match.group(2).title()
+                scenario_details["type"] = "reduce_category"
+                scenario_details["category"] = category
+                scenario_details["amount"] = amount
+            
+            # "reduce income by X%"
+            income_match = re.search(r'reduce.*income.*(\d+)\s*%', message_lower)
+            if income_match:
+                amount = float(income_match.group(1))
+                scenario_details["type"] = "reduce_income"
+                scenario_details["percentage"] = amount
+            
+            # "increase rent by $X"
+            increase_match = re.search(r'increase.*(\w+).*\$(\d+)', message_lower)
+            if increase_match:
+                category = increase_match.group(1).title()
+                amount = float(increase_match.group(2))
+                scenario_details["type"] = "increase_category"
+                scenario_details["category"] = category
+                scenario_details["amount"] = amount
+            
+            if scenario_details:
+                # Calculate simulation
+                sim_income = report.totalIncome
+                sim_expenses = report.totalExpenses
+                
+                if scenario_details.get("type") == "reduce_category":
+                    cat = scenario_details["category"]
+                    amt = scenario_details["amount"]
+                    sim_expenses = max(0, sim_expenses - amt)
+                    scenario_details["newExpenses"] = sim_expenses
+                    
+                elif scenario_details.get("type") == "reduce_income":
+                    pct = scenario_details["percentage"]
+                    sim_income = sim_income * (1 - pct/100)
+                    scenario_details["newIncome"] = sim_income
+                    
+                elif scenario_details.get("type") == "increase_category":
+                    sim_expenses = sim_expenses + scenario_details["amount"]
+                    scenario_details["newExpenses"] = sim_expenses
+                
+                sim_savings = (sim_income - sim_expenses) / sim_income * 100 if sim_income > 0 else 0
+                
+                response["message"] = f"Simulation: With these changes, your new totals would be:\n• Income: ${sim_income:,.0f}\n• Expenses: ${sim_expenses:,.0f}\n• Savings Rate: {sim_savings:.1f}%"
+                response["action"] = "what_if"
+                response["details"] = scenario_details
+                response["updatedMetrics"] = {
+                    "totalIncome": sim_income,
+                    "totalExpenses": sim_expenses,
+                    "savingsRate": sim_savings,
+                    "isSimulation": True
+                }
+            else:
+                response["message"] = "I can simulate scenarios like:\n• 'What if I spend $200 less on rent?'\n• 'What if my income drops 15%?'\n• 'What if I increase food budget by $100?'"
+                response["action"] = "suggest"
+    
+    # === COMMAND: Adjust category budget ===
+    elif "reduce" in message_lower or "lower" in message_lower or "cut" in message_lower:
+        if report:
+            # Find category mentioned
+            categories = ["housing", "food", "transportation", "utilities", "entertainment", "shopping", "healthcare", "insurance", "fitness"]
+            found_category = None
+            for cat in categories:
+                if cat in message_lower:
+                    found_category = cat.title()
+                    break
+            
+            # Find percentage
+            pct_match = re.search(r'(\d+)\s*%', message)
+            
+            if found_category and pct_match:
+                pct = int(pct_match.group(1))
+                for rec in report.budgetRecommendations:
+                    if rec.category == found_category:
+                        old_amount = rec.suggestedAmount
+                        new_amount = old_amount * (1 - pct/100)
+                        
+                        response["message"] = f"Done. I've reduced your {found_category} budget by {pct}% from ${old_amount:.2f} to ${new_amount:.2f}."
+                        response["action"] = "adjust_budget"
+                        response["details"] = {
+                            "category": found_category,
+                            "reduction": pct,
+                            "previousAmount": old_amount,
+                            "newAmount": new_amount
+                        }
+                        break
+            elif found_category:
+                response["message"] = f"How much would you like to reduce {found_category} by? (e.g., 'Reduce {found_category} by 20%')"
+                response["action"] = "clarify"
+            else:
+                response["message"] = "Which category would you like to adjust? (Housing, Food, Transportation, Utilities, Entertainment, Shopping, Healthcare)"
+                response["action"] = "clarify"
+        else:
+            response["message"] = "Please run the analysis first."
+            response["action"] = "error"
+    
+    # === COMMAND: Increase category ===
+    elif "increase" in message_lower:
+        if report:
+            categories = ["housing", "food", "transportation", "utilities", "entertainment", "shopping", "healthcare", "insurance", "fitness"]
+            found_category = None
+            for cat in categories:
+                if cat in message_lower:
+                    found_category = cat.title()
+                    break
+            
+            import re
+            amount_match = re.search(r'\$(\d+)', message)
+            
+            if found_category and amount_match:
+                amount = float(amount_match.group(1))
+                for rec in report.budgetRecommendations:
+                    if rec.category == found_category:
+                        old_amount = rec.suggestedAmount
+                        new_amount = old_amount + amount
+                        
+                        response["message"] = f"Done. I've increased your {found_category} budget by ${amount:.2f} to ${new_amount:.2f}."
+                        response["action"] = "adjust_budget"
+                        response["details"] = {
+                            "category": found_category,
+                            "increase": amount,
+                            "previousAmount": old_amount,
+                            "newAmount": new_amount
+                        }
+                        break
+            elif found_category:
+                response["message"] = f"How much would you like to increase {found_category} by? (e.g., 'Increase {found_category} by $100')"
+                response["action"] = "clarify"
+            else:
+                response["message"] = "Which category would you like to increase?"
+                response["action"] = "clarify"
+        else:
+            response["message"] = "Please run the analysis first."
+            response["action"] = "error"
+    
+    # === Default: Generate suggestions ===
+    else:
+        if report:
+            suggestions = []
+            
+            # Analyze spending patterns
+            for cat in report.categoryBreakdown:
+                if cat.percent > 30:
+                    suggestions.append(f"You're spending {cat.percent:.0f}% on {cat.category}. Try: 'Reduce {cat.category} to 25%'")
+                elif cat.category == "Housing" and cat.percent > 25:
+                    suggestions.append(f"Housing at {cat.percent:.0f}% is above the recommended 25%. Try: 'Reduce Housing by 10%'")
+            
+            if report.savingsRate < 10:
+                suggestions.append(f"Current savings is {report.savingsRate:.1f}%. Try: 'Save 15% of income'")
+            elif report.savingsRate < 20:
+                suggestions.append(f"Great savings rate of {report.savingsRate:.1f}%! Try: 'Save 20% of income'")
+            
+            if report.riskScore > 0.5:
+                suggestions.append(f"High risk score ({report.riskScore:.1f}). Review anomalies in the report.")
+            
+            if suggestions:
+                response["message"] = "Here are some suggestions based on your data:\n" + "\n".join(f"• {s}" for s in suggestions)
+                response["action"] = "suggestions"
+                response["suggestions"] = suggestions
+            else:
+                response["message"] = "Your budget looks balanced! Would you like to try a simulation? (e.g., 'What if I spend $200 less on rent?')"
+                response["action"] = "general"
+        else:
+            response["message"] = "Upload a CSV file and run the analysis first, then I can help you optimize your budget."
+            response["action"] = "ready"
+    
+    return response
+
+
+# What-If Simulation Endpoint
+@app.post("/api/simulation/{session_id}")
+async def run_simulation(session_id: str, simulation: dict):
+    """Run a what-if simulation without saving"""
+    
+    report = reports_db.get(session_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="No report found. Run analysis first.")
+    
+    sim_type = simulation.get("type")
+    params = simulation.get("params", {})
+    
+    # Copy current values
+    sim_income = report.totalIncome
+    sim_expenses = report.totalExpenses
+    
+    if sim_type == "reduce_category":
+        category = params.get("category")
+        amount = params.get("amount", 0)
+        sim_expenses = max(0, sim_expenses - amount)
+        
+    elif sim_type == "increase_category":
+        category = params.get("category")
+        amount = params.get("amount", 0)
+        sim_expenses = sim_expenses + amount
+        
+    elif sim_type == "reduce_income":
+        percentage = params.get("percentage", 0)
+        sim_income = sim_income * (1 - percentage/100)
+        
+    elif sim_type == "increase_income":
+        percentage = params.get("percentage", 0)
+        sim_income = sim_income * (1 + percentage/100)
+    
+    sim_savings = (sim_income - sim_expenses) / sim_income * 100 if sim_income > 0 else 0
+    
+    return {
+        "original": {
+            "income": report.totalIncome,
+            "expenses": report.totalExpenses,
+            "savingsRate": report.savingsRate
+        },
+        "simulation": {
+            "income": sim_income,
+            "expenses": sim_expenses,
+            "savingsRate": sim_savings
+        },
+        "changes": {
+            "incomeDiff": sim_income - report.totalIncome,
+            "expensesDiff": sim_expenses - report.totalExpenses,
+            "savingsRateDiff": sim_savings - report.savingsRate
+        }
+    }
+
+
+# Predictive Suggestions Endpoint
+@app.get("/api/suggestions/{session_id}")
+async def get_suggestions(session_id: str):
+    """Get AI-powered suggestions based on current data"""
+    
+    report = reports_db.get(session_id)
+    if not report:
+        return {"suggestions": [], "message": "No data available"}
+    
+    suggestions = []
+    
+    # Category-based suggestions
+    for cat in report.categoryBreakdown:
+        if cat.percent > 30:
+            suggestions.append({
+                "type": "warning",
+                "message": f"You're spending {cat.percent:.0f}% on {cat.category}",
+                "suggestedAction": f"Reduce {cat.category} to 25%",
+                "command": f"Reduce {cat.category} by 20%"
+            })
+    
+    # Housing is typically recommended at 25-30%
+    housing_cat = next((c for c in report.categoryBreakdown if c.category == "Housing"), None)
+    if housing_cat and housing_cat.percent > 28:
+        suggestions.append({
+            "type": "warning",
+            "message": f"Housing at {housing_cat.percent:.0f}% is above the recommended 25%",
+            "suggestedAction": "Consider reducing rent or looking for alternatives",
+            "command": "Reduce Housing by 15%"
+        })
+    
+    # Savings suggestions
+    if report.savingsRate < 10:
+        suggestions.append({
+            "type": "alert",
+            "message": f"Current savings rate is only {report.savingsRate:.1f}%",
+            "suggestedAction": "Aim for at least 20% savings",
+            "command": "Save 20% of income"
+        })
+    elif report.savingsRate < 20:
+        suggestions.append({
+            "type": "info",
+            "message": f"Good savings rate of {report.savingsRate:.1f}%",
+            "suggestedAction": "Try to increase to 25%",
+            "command": "Save 25% of income"
+        })
+    else:
+        suggestions.append({
+            "type": "success",
+            "message": f"Excellent savings rate of {report.savingsRate:.1f}%!",
+            "suggestedAction": "Consider investing or increasing emergency fund",
+            "command": "What if I save 30%?"
+        })
+    
+    # Risk-based suggestions
+    if report.riskScore > 0.7:
+        suggestions.append({
+            "type": "alert",
+            "message": f"High risk score: {report.riskScore:.1f}",
+            "suggestedAction": "Review flagged transactions",
+            "command": "Show anomalies"
+        })
+    
+    # What-if suggestions
+    suggestions.append({
+        "type": "simulation",
+        "message": "Explore scenarios",
+        "suggestedAction": "Try what-if simulations",
+        "command": "What if I spend $200 less on rent?"
+    })
+    
+    return {
+        "suggestions": suggestions,
+        "summary": {
+            "totalIncome": report.totalIncome,
+            "totalExpenses": report.totalExpenses,
+            "savingsRate": report.savingsRate,
+            "riskScore": report.riskScore
+        }
+    }
 
 
 if __name__ == "__main__":

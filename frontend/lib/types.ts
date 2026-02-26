@@ -131,3 +131,51 @@ export interface Settings {
   tokenLimitDaily: number;
   dataRetentionDays: number;
 }
+
+// Conversation / NLP Types
+export interface ConversationResponse {
+  message: string;
+  action: string;
+  details: Record<string, any>;
+  suggestions: string[];
+  updatedMetrics?: {
+    totalIncome?: number;
+    totalExpenses?: number;
+    savingsRate?: number;
+  };
+}
+
+export interface Suggestion {
+  type: 'warning' | 'alert' | 'info' | 'success' | 'simulation';
+  message: string;
+  suggestedAction: string;
+  command: string;
+}
+
+export interface SimulationResult {
+  original: {
+    income: number;
+    expenses: number;
+    savingsRate: number;
+  };
+  simulation: {
+    income: number;
+    expenses: number;
+    savingsRate: number;
+  };
+  changes: {
+    incomeDiff: number;
+    expensesDiff: number;
+    savingsRateDiff: number;
+  };
+}
+
+// UI Types
+export type TabId = 'ingestion' | 'processing' | 'dashboard';
+
+export interface TerminalLog {
+  id: string;
+  status: 'ok' | 'running' | 'error' | 'warning';
+  message: string;
+  timestamp: Date;
+}
