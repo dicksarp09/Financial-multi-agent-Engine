@@ -2,6 +2,12 @@
 FastAPI Backend for Financial Agent
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,6 +18,10 @@ import json
 import asyncio
 import re
 from enum import Enum
+
+# Import database and LLM
+from database import get_database
+from llm_client import get_llm_client
 
 app = FastAPI(title="Financial Agent API", version="1.0.0")
 
@@ -264,6 +274,15 @@ async def create_session():
         savingsRate=0.0,
     )
     sessions_db[session_id] = session
+    
+    # Also save to database for persistence
+    try:
+        db = get_database()
+        db.create_session(session_id, session.date, "Running")
+        print(f"[DEBUG] Session saved to database: {session_id}")
+    except Exception as e:
+        print(f"[ERROR] Failed to save session to database: {e}")
+    
     system_status.activeSessions += 1
     return session
 
@@ -314,6 +333,17 @@ async def validate_file(file: UploadFile = File(...), session_id: Optional[str] 
         if session_id:
             transactions_db[session_id] = transactions
             print(f"[DEBUG] validate_file: stored {len(transactions)} transactions for session_id={session_id}")
+            
+            # Also save to database for persistence
+            try:
+                db = get_database()
+                db.save_transactions(session_id, [
+                    {"id": t.id, "date": t.date, "description": t.description, "amount": t.amount, "category": getattr(t, 'category', None)}
+                    for t in transactions
+                ])
+                print(f"[DEBUG] Transactions saved to database")
+            except Exception as e:
+                print(f"[ERROR] Failed to save transactions to database: {e}")
         
         return {
             "valid": True,
@@ -561,6 +591,23 @@ async def execute_workflow(session_id: str, background_tasks: BackgroundTasks):
         )
         reports_db[session_id] = report
         
+        # Also save to database for persistence
+        try:
+            db = get_database()
+            db.save_report(session_id, {
+                "totalIncome": report.totalIncome,
+                "totalExpenses": report.totalExpenses,
+                "savingsRate": report.savingsRate,
+                "riskScore": report.riskScore,
+                "categoryBreakdown": [{"category": c.category, "amount": c.amount, "percent": c.percent} for c in report.categoryBreakdown],
+                "anomalies": [{"id": a.id, "transactionId": a.transactionId, "description": a.description, "amount": a.amount, "reason": a.reason, "riskScore": a.riskScore, "severity": a.severity} for a in report.anomalies],
+                "budgetRecommendations": [{"category": b.category, "currentAmount": b.currentAmount, "suggestedAmount": b.suggestedAmount, "rationale": b.rationale, "impact": b.impact} for b in report.budgetRecommendations],
+                "executionTrace": []
+            })
+            print(f"[DEBUG] Report saved to database for session {session_id}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save to database: {e}")
+        
         # Clear approval after completion
         if session_id in current_approvals:
             del current_approvals[session_id]
@@ -788,8 +835,31 @@ async def respond_to_approval(session_id: str, action: str):
 # Reports
 @app.get("/api/reports/{session_id}", response_model=ReportData)
 async def get_report(session_id: str):
-    print(f"[DEBUG] get_report: session_id={session_id}, reports_db_keys={list(reports_db.keys())}")
+    print(f"[DEBUG] get_report: session_id={session_id}")
     
+    # Try to get from database first
+    try:
+        db = get_database()
+        db_report = db.get_report(session_id)
+        if db_report:
+            print(f"[DEBUG] Found report in database")
+            return ReportData(
+                sessionId=session_id,
+                version=db_report.get("version", 1),
+                totalIncome=db_report.get("total_income", 0),
+                totalExpenses=db_report.get("total_expenses", 0),
+                savingsRate=db_report.get("savings_rate", 0),
+                riskScore=db_report.get("risk_score", 0),
+                categoryBreakdown=[CategoryBreakdown(**c) for c in db_report.get("categoryBreakdown", [])],
+                anomalies=[Anomaly(**a) for a in db_report.get("anomalies", [])],
+                budgetRecommendations=[BudgetRecommendation(**b) for b in db_report.get("budgetRecommendations", [])],
+                executionTrace=db_report.get("executionTrace", []),
+                createdAt=db_report.get("created_at", datetime.utcnow().isoformat())
+            )
+    except Exception as e:
+        print(f"[DEBUG] Database error: {e}")
+    
+    # Fallback to memory
     if session_id not in reports_db:
         # Generate a sample report
         report = ReportData(
@@ -894,64 +964,97 @@ async def export_report(session_id: str, format: str = "json"):
         raise HTTPException(status_code=400, detail="Unsupported format")
 
 
-# Conversation / NLP Processing using Agent Architecture
+# Conversation / NLP Processing using Groq LLM
 class ConversationRequest(BaseModel):
     message: str
 
 @app.post("/api/conversation/{session_id}")
 async def send_message(session_id: str, request: ConversationRequest):
-    """Process conversational refinement using the agent architecture"""
+    """Process conversational refinement using Groq LLM"""
     
     message = request.message
-    # Import from orchestrator
-    try:
-        from orchestrator import refine_session
-    except ImportError as e:
-        # Fallback to simple NLP if orchestrator not available
-        print(f"Warning: Could not import orchestrator: {e}")
-        return await send_message_fallback(session_id, message)
     
-    # Get current report and transactions
-    transactions = transactions_db.get(session_id, [])
-    report = reports_db.get(session_id)
+    # Get database and LLM
+    db = get_database()
     
-    print(f"[DEBUG] Conversation: session_id={session_id}, transactions={len(transactions)}, report={'found' if report else 'NOT FOUND'}, reports_keys={list(reports_db.keys())}")
+    # Get report from database
+    report_data = db.get_report(session_id)
     
-    if not report:
+    # Get transactions from database
+    transactions_data = db.get_transactions(session_id)
+    
+    # Get conversation history
+    history = db.get_conversation_history(session_id, limit=5)
+    
+    # Save user message
+    db.add_message(session_id, "user", message)
+    
+    print(f"[DEBUG] Conversation: session_id={session_id}, transactions={len(transactions_data)}, report={'found' if report_data else 'NOT FOUND'}")
+    
+    if not report_data:
+        response_msg = "Please run the analysis first before using conversational refinement. Upload a CSV file and start the analysis."
+        db.add_message(session_id, "assistant", response_msg)
         return {
-            "message": "Please run the analysis first before using conversational refinement.",
+            "message": response_msg,
             "action": "error",
             "details": {},
             "suggestions": ["Upload a CSV and run analysis first"],
             "updatedMetrics": {}
         }
     
-    # Convert report to dict format expected by agent
-    report_dict = {
-        "total_income": report.totalIncome,
-        "total_expenses": report.totalExpenses,
-        "savings_rate": report.savingsRate,
-        "risk_score": report.riskScore,
-        "category_breakdown": [
-            {"category": c.category, "amount": c.amount, "percent": c.percent}
-            for c in report.categoryBreakdown
-        ],
-        "budget_recommendations": [
-            {
-                "category": b.category,
-                "current_amount": b.currentAmount,
-                "suggested_amount": b.suggestedAmount,
-                "rationale": b.rationale,
-                "impact": b.impact
-            }
-            for b in report.budgetRecommendations
+    # Try to use Groq LLM
+    try:
+        print("[DEBUG] Getting LLM client...")
+        llm = get_llm_client()
+        print("[DEBUG] LLM client created successfully")
+        
+        # Convert to dict format for LLM
+        report_dict = {
+            "total_income": report_data.get("total_income", 0),
+            "total_expenses": report_data.get("total_expenses", 0),
+            "savings_rate": report_data.get("savings_rate", 0),
+            "risk_score": report_data.get("risk_score", 0),
+            "category_breakdown": report_data.get("categoryBreakdown", []),
+            "budget_recommendations": report_data.get("budgetRecommendations", [])
+        }
+        
+        transactions_list = [
+            {"id": t.get("id"), "date": t.get("date"), "description": t.get("description"), 
+             "amount": t.get("amount"), "category": t.get("category")}
+            for t in transactions_data
         ]
-    }
+        
+        # Get LLM response
+        llm_response = llm.chat(
+            message=message,
+            report=report_dict,
+            transactions=transactions_list,
+            conversation_history=history
+        )
+        
+        if llm_response.get("success"):
+            response_msg = llm_response["message"]
+        else:
+            response_msg = f"I encountered an error: {llm_response.get('error')}. Let me try with the basic analysis instead."
+        
+    except Exception as e:
+        print(f"[ERROR] LLM Error: {e}")
+        response_msg = f"I'm having trouble connecting to the AI. Here's what I can tell you from your data:\n\n"
+        response_msg += f"- Income: ${report_data.get('total_income', 0):,.2f}\n"
+        response_msg += f"- Expenses: ${report_data.get('total_expenses', 0):,.2f}\n"
+        response_msg += f"- Savings: {report_data.get('savings_rate', 0):.1f}%\n\n"
+        response_msg += "Please try again in a moment."
     
-    transactions_list = [
-        {"id": t.id, "date": t.date, "description": t.description, "amount": t.amount, "category": t.category}
-        for t in transactions
-    ]
+    # Save assistant response
+    db.add_message(session_id, "assistant", response_msg)
+    
+    return {
+        "message": response_msg,
+        "action": "completed",
+        "details": {},
+        "suggestions": [],
+        "updatedMetrics": {}
+    }
     
     try:
         # Use the agent architecture
