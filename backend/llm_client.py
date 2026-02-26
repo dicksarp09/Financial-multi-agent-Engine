@@ -39,7 +39,7 @@ class LLMClient:
         if not self.api_key:
             raise ValueError("GROQ_API_KEY not set")
         self.client = Groq(api_key=self.api_key)
-        self.model = "llama-3.1-70b-versatile"
+        self.model = "openai/gpt-oss-120b"
     
     def build_context(self, report: Optional[Dict], transactions: List[Dict], conversation_history: List[Dict]) -> str:
         """Build context string from report and transactions"""
