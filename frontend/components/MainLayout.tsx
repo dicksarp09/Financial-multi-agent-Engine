@@ -78,6 +78,9 @@ export function MainLayout() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [uploadedTransactions, setUploadedTransactions] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [goals, setGoals] = useState<Array<{goal: string; target: number; status: string; current?: number}>>([]);
+  const [reasoningChain, setReasoningChain] = useState<string[]>([]);
+  const [autoExecute, setAutoExecute] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Poll for updates when executing
@@ -187,6 +190,17 @@ export function MainLayout() {
         } else if (response.error) {
           messageContent = 'Error: ' + response.error;
         }
+        
+        // Update autonomous features from response
+        if (response.reasoning) {
+          setReasoningChain(response.reasoning);
+        }
+        if (response.goals) {
+          setGoals(response.goals);
+        }
+        if (response.autoExecute !== undefined) {
+          setAutoExecute(response.autoExecute);
+        }
       }
       
       setChatMessages(prev => [...prev, { 
@@ -195,9 +209,13 @@ export function MainLayout() {
         timestamp: new Date() 
       }]);
       
-      // Reload report if metrics changed
+      // Reload report if metrics changed or budget applied
+      const action = response?.action || '';
       if (response?.updatedMetrics && Object.keys(response.updatedMetrics).length > 0) {
         console.log('[Chat] Metrics changed, reloading report...');
+        await loadReport(currentSessionId!);
+      } else if (action === 'budget_applied' || action === 'completed') {
+        console.log('[Chat] Action completed, reloading report...');
         await loadReport(currentSessionId!);
       }
     } catch (error) {
@@ -289,6 +307,67 @@ export function MainLayout() {
               </button>
             ))}
           </div>
+        </div>
+        
+        {/* Goals Panel */}
+        {goals.length > 0 && (
+          <div className="p-4 border-t border-fintech-border">
+            <h3 className="text-xs text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+              <Target className="w-4 h-4" />
+              Active Goals
+            </h3>
+            <div className="space-y-2">
+              {goals.map((goal, idx) => (
+                <div key={idx} className="p-3 bg-fintech-card rounded-lg border border-fintech-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-white">{goal.goal}</span>
+                    <span className={clsx(
+                      'text-xs px-2 py-0.5 rounded-full',
+                      goal.status === 'achieved' ? 'bg-emerald-500/20 text-emerald-400' :
+                      goal.status === 'active' ? 'bg-amber-500/20 text-amber-400' :
+                      'bg-gray-500/20 text-gray-400'
+                    )}>
+                      {goal.status}
+                    </span>
+                  </div>
+                  {goal.current !== undefined && (
+                    <div className="mt-2">
+                      <div className="flex justify-between text-xs text-gray-500 mb-1">
+                        <span>Current: {goal.current}%</span>
+                        <span>Target: {goal.target}%</span>
+                      </div>
+                      <div className="h-1.5 bg-fintech-darker rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-emerald-500 rounded-full"
+                          style={{ width: `${Math.min(100, (goal.current / goal.target) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* Auto-Execute Toggle */}
+        <div className="p-4 border-t border-fintech-border">
+          <h3 className="text-xs text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-2">
+            <Bot className="w-4 h-4" />
+            Auto-Execute Mode
+          </h3>
+          <button
+            onClick={() => handleSuggestionClick(autoExecute ? 'disable auto execute' : 'enable auto execute')}
+            className={clsx(
+              'w-full flex items-center justify-between p-3 rounded-lg border transition-all',
+              autoExecute 
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                : 'bg-fintech-card border-fintech-border text-gray-400'
+            )}
+          >
+            <span className="text-sm">{autoExecute ? 'ON' : 'OFF'}</span>
+            <span className="text-xs">{autoExecute ? 'Auto-apply changes' : 'Ask before changes'}</span>
+          </button>
         </div>
       </div>
 
@@ -467,7 +546,10 @@ export function MainLayout() {
                 <h2 className="text-2xl font-semibold text-white">Financial Overview</h2>
                 <p className="text-gray-500">Analysis complete</p>
               </div>
-              <button className="btn-primary flex items-center gap-2">
+                <button 
+                onClick={() => window.open(`http://localhost:8002/api/reports/${currentSessionId}/export?format=pdf`, '_blank')}
+                className="btn-primary flex items-center gap-2"
+              >
                 <FileText className="w-4 h-4" />
                 Export PDF
               </button>
@@ -596,6 +678,24 @@ export function MainLayout() {
             <p className="text-xs text-gray-500 mt-1">Session: {currentSessionId}</p>
           )}
         </div>
+        
+        {/* Reasoning Chain */}
+        {reasoningChain.length > 0 && (
+          <div className="px-4 pt-4">
+            <h3 className="text-xs text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+              <Sparkles className="w-3 h-3" />
+              Reasoning
+            </h3>
+            <div className="bg-fintech-darker rounded-lg p-3 space-y-1">
+              {reasoningChain.map((step, idx) => (
+                <div key={idx} className="flex items-start gap-2 text-xs">
+                  <ChevronRight className="w-3 h-3 text-emerald-400 mt-0.5 flex-shrink-0" />
+                  <span className="text-gray-400">{step}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         
         {/* Chat Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ maxHeight: '60vh' }}>

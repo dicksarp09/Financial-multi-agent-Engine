@@ -3,6 +3,7 @@ FastAPI Backend for Financial Agent
 """
 
 import os
+import re
 from dotenv import load_dotenv
 
 # Load .env file
@@ -16,12 +17,22 @@ from datetime import datetime
 import uuid
 import json
 import asyncio
-import re
 from enum import Enum
 
 # Import database and LLM
 from database import get_database
 from llm_client import get_llm_client
+
+# Import autonomous agent (from project root)
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from agents.autonomous_agent import get_autonomous_agent, AutonomousAgent
+except ImportError:
+    # Fallback if running from different directory
+    get_autonomous_agent = None
+    AutonomousAgent = None
 
 app = FastAPI(title="Financial Agent API", version="1.0.0")
 
@@ -960,19 +971,67 @@ async def export_report(session_id: str, format: str = "json"):
         for cat in report.categoryBreakdown:
             lines.append(f"{cat.category},{cat.amount},{cat.percent}")
         return "\n".join(lines)
+    elif format == "pdf":
+        # Generate simple text report
+        content = f"""
+FINANCIAL ANALYSIS REPORT
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+SUMMARY
+=======
+Total Income: ${report.totalIncome:,.2f}
+Total Expenses: ${report.totalExpenses:,.2f}
+Savings Rate: {report.savingsRate:.1f}%
+Risk Score: {report.riskScore:.1f}
+
+SPENDING BY CATEGORY
+==================
+"""
+        for cat in report.categoryBreakdown:
+            content += f"{cat.category}: ${cat.amount:,.2f} ({cat.percent}%)\n"
+        
+        if report.budgetRecommendations:
+            content += """
+BUDGET RECOMMENDATIONS
+====================
+"""
+            for rec in report.budgetRecommendations:
+                content += f"{rec.category}: ${rec.currentAmount:,.2f} -> ${rec.suggestedAmount:,.2f} ({rec.impact})\n"
+        
+        if report.anomalies:
+            content += """
+ANOMALIES DETECTED
+=================
+"""
+            for anomaly in report.anomalies:
+                content += f"- {anomaly.description}: ${anomaly.amount:,.2f} ({anomaly.severity})\n"
+        
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(
+            content=content,
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename=report_{session_id}.txt"}
+        )
     else:
-        raise HTTPException(status_code=400, detail="Unsupported format")
+        raise HTTPException(status_code=400, detail="Unsupported format. Use: json, csv, or pdf")
 
 
-# Conversation / NLP Processing using Groq LLM
+# Conversation / NLP Processing using Autonomous Agent
 class ConversationRequest(BaseModel):
     message: str
+    autoExecute: Optional[bool] = False
+
+# In-memory storage for autonomous features
+autonomous_goals: Dict[str, List[Dict]] = {}
+auto_execute_mode: Dict[str, bool] = {}
+pending_budget_changes: Dict[str, Dict] = {}
 
 @app.post("/api/conversation/{session_id}")
 async def send_message(session_id: str, request: ConversationRequest):
-    """Process conversational refinement using Groq LLM"""
+    """Process conversational refinement using Autonomous Agent"""
     
     message = request.message
+    auto_execute = request.autoExecute
     
     # Get database and LLM
     db = get_database()
@@ -999,17 +1058,140 @@ async def send_message(session_id: str, request: ConversationRequest):
             "action": "error",
             "details": {},
             "suggestions": ["Upload a CSV and run analysis first"],
-            "updatedMetrics": {}
+            "updatedMetrics": {},
+            "reasoning": [],
+            "goals": []
         }
     
-    # Try to use Groq LLM
-    updated_metrics = {}
-    try:
-        print("[DEBUG] Getting LLM client...")
-        llm = get_llm_client()
-        print("[DEBUG] LLM client created successfully")
+    # Handle auto-execute mode toggle
+    if "auto" in message.lower() and ("execute" in message.lower() or "mode" in message.lower()):
+        if "on" in message.lower() or "enable" in message.lower():
+            auto_execute_mode[session_id] = True
+            response_msg = "Auto-execute mode is now ON. I'll automatically apply budget changes when you request them without asking for approval."
+            db.add_message(session_id, "assistant", response_msg)
+            return {
+                "message": response_msg,
+                "action": "auto_execute_enabled",
+                "details": {"autoExecute": True},
+                "suggestions": [],
+                "updatedMetrics": {},
+                "reasoning": ["User enabled auto-execute mode"],
+                "goals": autonomous_goals.get(session_id, [])
+            }
+        elif "off" in message.lower() or "disable" in message.lower():
+            auto_execute_mode[session_id] = False
+            response_msg = "Auto-execute mode is now OFF. I'll ask for your approval before making any budget changes."
+            db.add_message(session_id, "assistant", response_msg)
+            return {
+                "message": response_msg,
+                "action": "auto_execute_disabled",
+                "details": {"autoExecute": False},
+                "suggestions": [],
+                "updatedMetrics": {},
+                "reasoning": ["User disabled auto-execute mode"],
+                "goals": autonomous_goals.get(session_id, [])
+            }
+    
+    # Handle budget change approval
+    message_lower = message.lower()
+    if session_id in pending_budget_changes and any(word in message_lower for word in ["yes", "apply", "confirm", "do it", "go ahead", "sure"]):
+        pending = pending_budget_changes[session_id]
+        reasoning_steps = ["Applying pending budget changes..."]
         
-        # Convert to dict format for LLM
+        # Regenerate budget recommendations with proper format
+        cat_breakdown = pending.get("category_breakdown", [])
+        budget_recommendations = []
+        for c in cat_breakdown:
+            current_amt = c.get("amount", 0)
+            suggested_amt = current_amt * 0.9
+            budget_recommendations.append({
+                "category": c.get("category", ""),
+                "currentAmount": current_amt,
+                "suggestedAmount": suggested_amt,
+                "rationale": f"Current spending ${current_amt:.2f} - recommend ${suggested_amt:.2f}",
+                "impact": f"-${current_amt - suggested_amt:.2f}"
+            })
+        
+        db.save_report(session_id, {
+            "totalIncome": report_data.get("total_income", 0),
+            "totalExpenses": pending["total_expenses"],
+            "savingsRate": pending["savings_rate"],
+            "riskScore": report_data.get("risk_score", 0),
+            "categoryBreakdown": pending.get("category_breakdown", []),
+            "budgetRecommendations": budget_recommendations,
+            "anomalies": [],
+            "executionTrace": []
+        })
+        
+        response_msg = f"Done! I've applied the budget changes. {pending['category']} is now ${pending['new_amount']:,.2f} (was ${pending['old_amount']:,.2f}). Your new savings rate is {pending['savings_rate']:.1f}%."
+        reasoning_steps.append(f"Applied: {pending['category']} ${pending['old_amount']:,.2f} → ${pending['new_amount']:,.2f}")
+        del pending_budget_changes[session_id]
+        
+        db.add_message(session_id, "assistant", response_msg)
+        return {
+            "message": response_msg,
+            "action": "budget_applied",
+            "details": pending,
+            "suggestions": [],
+            "updatedMetrics": {"savings_rate": pending["savings_rate"], "total_expenses": pending["total_expenses"]},
+            "reasoning": reasoning_steps,
+            "goals": autonomous_goals.get(session_id, []),
+            "autoExecute": auto_execute_mode.get(session_id, False)
+        }
+    
+    # Handle goal setting
+    message_lower = message.lower()
+    if "set goal" in message_lower or "goal:" in message_lower or "save" in message_lower and "%" in message:
+        # Parse savings goal: "save X%", "set goal to save X%"
+        goal_match = re.search(r'(\d+)\s*%', message)
+        if goal_match:
+            target_savings = int(goal_match.group(1))
+            if session_id not in autonomous_goals:
+                autonomous_goals[session_id] = []
+            
+            # Check if goal already exists
+            existing_goal = None
+            for g in autonomous_goals[session_id]:
+                if "savings" in g.get("goal", "").lower():
+                    existing_goal = g
+            
+            if existing_goal:
+                existing_goal["target"] = target_savings
+                existing_goal["status"] = "active"
+            else:
+                autonomous_goals[session_id].append({
+                    "goal": f"Savings Rate {target_savings}%",
+                    "target": target_savings,
+                    "status": "active",
+                    "current": report_data.get("savings_rate", 0)
+                })
+            
+            current_savings = report_data.get("savings_rate", 0)
+            if current_savings >= target_savings:
+                response_msg = f"Goal set! You're already saving {current_savings:.1f}%, which exceeds your {target_savings}% goal. Great job!"
+            else:
+                gap = target_savings - current_savings
+                response_msg = f"Goal set! I'll work toward increasing your savings rate from {current_savings:.1f}% to {target_savings}%. This requires reducing expenses by approximately ${report_data.get('total_income', 0) * gap / 100:.0f}."
+            
+            db.add_message(session_id, "assistant", response_msg)
+            return {
+                "message": response_msg,
+                "action": "goal_set",
+                "details": {"goal": f"Save {target_savings}%", "target": target_savings},
+                "suggestions": ["Try cutting non-essential spending to reach your goal"],
+                "updatedMetrics": {},
+                "reasoning": [f"Analyzing current savings rate: {current_savings:.1f}%", f"Setting target: {target_savings}%"],
+                "goals": autonomous_goals.get(session_id, [])
+            }
+    
+    # Try to use Autonomous Agent
+    updated_metrics = {}
+    reasoning_steps = []
+    
+    try:
+        print("[DEBUG] Getting autonomous agent...")
+        
+        # Convert to dict format for agent
         report_dict = {
             "total_income": report_data.get("total_income", 0),
             "total_expenses": report_data.get("total_expenses", 0),
@@ -1026,16 +1208,20 @@ async def send_message(session_id: str, request: ConversationRequest):
         ]
         
         # Check if user wants to make changes
-        message_lower = message.lower()
         updated_metrics = {}
+        reasoning_steps = [
+            "Analyzing your request...",
+            "Reviewing current budget allocation...",
+        ]
         
         # Handle "cut [category]" or "reduce [category]" requests
         if "cut" in message_lower or "reduce" in message_lower or "increase" in message_lower:
             for cat in report_dict.get("category_breakdown", []):
                 cat_name = cat.get("category", "").lower()
                 if cat_name in message_lower:
+                    reasoning_steps.append(f"Found {cat.get('category')} in your budget")
+                    
                     # Extract percentage if mentioned
-                    import re
                     pct_match = re.search(r'(\d+)\s*%', message)
                     amount_match = re.search(r'\$(\d+)', message)
                     
@@ -1046,14 +1232,22 @@ async def send_message(session_id: str, request: ConversationRequest):
                         pct = int(pct_match.group(1)) / 100
                         if "increase" in message_lower:
                             new_amount = old_amount * (1 + pct)
+                            reasoning_steps.append(f"Increasing {cat.get('category')} by {int(pct*100)}%")
                         else:
                             new_amount = old_amount * (1 - pct)
+                            reasoning_steps.append(f"Reducing {cat.get('category')} by {int(pct*100)}%")
                     elif amount_match:
                         amount_change = int(amount_match.group(1))
                         if "increase" in message_lower:
                             new_amount = old_amount + amount_change
+                            reasoning_steps.append(f"Increasing {cat.get('category')} by ${amount_change}")
                         else:
                             new_amount = max(0, old_amount - amount_change)
+                            reasoning_steps.append(f"Reducing {cat.get('category')} by ${amount_change}")
+                    else:
+                        # Default 10% reduction
+                        new_amount = old_amount * 0.9
+                        reasoning_steps.append(f"Reducing {cat.get('category')} by 10% (default)")
                     
                     # Update expenses and savings
                     expense_diff = old_amount - new_amount
@@ -1063,65 +1257,158 @@ async def send_message(session_id: str, request: ConversationRequest):
                     # Update the category amount in the list
                     cat["amount"] = new_amount
                     
+                    # Recalculate percentages for all categories
+                    total_exp_after = sum(c.get("amount", 0) for c in report_dict.get("category_breakdown", []))
+                    for c in report_dict.get("category_breakdown", []):
+                        c["percent"] = round((c.get("amount", 0) / total_exp_after * 100), 1) if total_exp_after > 0 else 0
+                    
                     # Also update in report_data for saving
                     for cat_data in report_data.get("categoryBreakdown", []):
                         if cat_data.get("category", "").lower() == cat_name:
                             cat_data["amount"] = new_amount
                             break
                     
+                    # Check auto-execute mode
+                    should_auto_execute = auto_execute_mode.get(session_id, False) or auto_execute
+                    
+                    # Store pending changes for approval
+                    pending_budget_changes[session_id] = {
+                        "category": cat.get("category"),
+                        "old_amount": old_amount,
+                        "new_amount": new_amount,
+                        "total_expenses": new_total_expenses,
+                        "savings_rate": new_savings,
+                        "category_breakdown": report_dict.get("category_breakdown", [])
+                    }
+                    
+                    if should_auto_execute:
+                        # Apply immediately
+                        reasoning_steps.append("Auto-execute mode is ON - applying changes directly")
+                        db.save_report(session_id, {
+                            "totalIncome": report_dict["total_income"],
+                            "totalExpenses": new_total_expenses,
+                            "savingsRate": new_savings,
+                            "riskScore": report_dict["risk_score"],
+                            "categoryBreakdown": report_dict["category_breakdown"],
+                            "budgetRecommendations": report_dict.get("budget_recommendations", []),
+                            "anomalies": [],
+                            "executionTrace": []
+                        })
+                        # Clear pending changes after auto-apply
+                        if session_id in pending_budget_changes:
+                            del pending_budget_changes[session_id]
+                    else:
+                        reasoning_steps.append("Waiting for user approval before applying changes")
+                    
                     updated_metrics = {
                         "total_expenses": new_total_expenses,
                         "savings_rate": new_savings,
                         "category_changed": cat.get("category"),
                         "old_amount": old_amount,
-                        "new_amount": new_amount
+                        "new_amount": new_amount,
+                        "auto_executed": should_auto_execute,
+                        "pending_approval": not should_auto_execute
                     }
                     
                     # Update in memory
                     report_data["total_expenses"] = new_total_expenses
                     report_data["savings_rate"] = new_savings
                     
-                    # Update in database
-                    db.save_report(session_id, {
-                        "totalIncome": report_dict["total_income"],
-                        "totalExpenses": new_total_expenses,
-                        "savingsRate": new_savings,
-                        "riskScore": report_dict["risk_score"],
-                        "categoryBreakdown": report_dict["category_breakdown"],
-                        "budgetRecommendations": report_dict.get("budget_recommendations", []),
-                        "anomalies": [],
-                        "executionTrace": []
-                    })
+                    # Generate new budget recommendations based on updated categories
+                    budget_recommendations = []
+                    for c in report_dict.get("category_breakdown", []):
+                        cat_name = c.get("category", "")
+                        current_amt = c.get("amount", 0)
+                        suggested_amt = current_amt * 0.9
+                        impact_val = current_amt - suggested_amt
+                        budget_recommendations.append({
+                            "category": cat_name,
+                            "currentAmount": current_amt,
+                            "suggestedAmount": suggested_amt,
+                            "rationale": f"Current spending ${current_amt:.2f} - recommend ${suggested_amt:.2f} (10% reduction)",
+                            "impact": f"-${impact_val:.2f}"
+                        })
+                    
+                    report_dict["budget_recommendations"] = budget_recommendations
+                    
+                    # Update in database only if auto-execute
+                    if should_auto_execute:
+                        db.save_report(session_id, {
+                            "totalIncome": report_dict["total_income"],
+                            "totalExpenses": new_total_expenses,
+                            "savingsRate": new_savings,
+                            "riskScore": report_dict["risk_score"],
+                            "categoryBreakdown": report_dict["category_breakdown"],
+                            "budgetRecommendations": budget_recommendations,
+                            "anomalies": [],
+                            "executionTrace": []
+                        })
+                        print(f"[DEBUG] Auto-updated budget: {cat.get('category')} from {old_amount} to {new_amount}")
+                    
+                    reasoning_steps.append(f"New savings rate: {new_savings:.1f}%")
                     print(f"[DEBUG] Updated budget: {cat.get('category')} from {old_amount} to {new_amount}")
                     break
         
-        # Get LLM response
-        llm_response = llm.chat(
-            message=message,
-            report=report_dict,
-            transactions=transactions_list,
-            conversation_history=history
-        )
-        
-        if llm_response.get("success"):
-            response_msg = llm_response["message"]
+        # Get LLM response using autonomous agent
+        try:
+            autonomous_agent = get_autonomous_agent()
             
-            # If we made changes, add confirmation
-            if updated_metrics:
-                cat_name = updated_metrics.get("category_changed", "")
-                old_amt = updated_metrics.get("old_amount", 0)
-                new_amt = updated_metrics.get("new_amount", 0)
-                response_msg = f"I've updated your budget. {cat_name} changed from ${old_amt:,.2f} to ${new_amt:,.2f}. The changes are now reflected on your dashboard.\n\n" + response_msg
-        else:
-            response_msg = f"I encountered an error: {llm_response.get('error')}. Let me try with the basic analysis instead."
+            # Format conversation history for agent
+            history_formatted = [{"role": h.get("role", "user"), "content": h.get("message", "")} for h in history]
+            
+            result = autonomous_agent.execute(session_id, {
+                "message": message,
+                "report": report_dict,
+                "transactions": transactions_list,
+                "conversation_history": history_formatted
+            })
+            
+            response_msg = result.get("message", "")
+            reasoning_steps.extend(result.get("reasoning", []))
+            
+        except Exception as e:
+            print(f"[ERROR] Autonomous agent error: {e}")
+            # Fallback to basic LLM
+            llm = get_llm_client()
+            llm_response = llm.chat(
+                message=message,
+                report=report_dict,
+                transactions=transactions_list,
+                conversation_history=history
+            )
+            response_msg = llm_response.get("message", "I processed your request.")
+        
+        # If we made changes, add confirmation
+        if updated_metrics:
+            cat_name = updated_metrics.get("category_changed", "")
+            old_amt = updated_metrics.get("old_amount", 0)
+            new_amt = updated_metrics.get("new_amount", 0)
+            auto_exec = updated_metrics.get("auto_executed", False)
+            
+            if auto_exec:
+                response_msg = f"I've automatically updated your budget. {cat_name} changed from ${old_amt:,.2f} to ${new_amt:,.2f}. The changes are now reflected on your dashboard.\n\n" + response_msg
+            else:
+                response_msg = f"I can update your budget. {cat_name} would change from ${old_amt:,.2f} to ${new_amt:,.2f}. Would you like me to apply this change?\n\n" + response_msg
+        
+        # Check if any goals are being worked toward
+        goals = autonomous_goals.get(session_id, [])
+        if goals:
+            current_savings = report_data.get("savings_rate", 0)
+            for goal in goals:
+                if goal.get("status") == "active":
+                    target = goal.get("target", 0)
+                    if current_savings >= target:
+                        goal["status"] = "achieved"
+                        reasoning_steps.append(f"Congratulations! You've reached your savings goal of {target}%!")
         
     except Exception as e:
-        print(f"[ERROR] LLM Error: {e}")
+        print(f"[ERROR] Conversation Error: {e}")
         response_msg = f"I'm having trouble connecting to the AI. Here's what I can tell you from your data:\n\n"
         response_msg += f"- Income: ${report_data.get('total_income', 0):,.2f}\n"
         response_msg += f"- Expenses: ${report_data.get('total_expenses', 0):,.2f}\n"
         response_msg += f"- Savings: {report_data.get('savings_rate', 0):.1f}%\n\n"
         response_msg += "Please try again in a moment."
+        reasoning_steps = ["Error processing request"]
     
     # Save assistant response
     db.add_message(session_id, "assistant", response_msg)
@@ -1131,7 +1418,10 @@ async def send_message(session_id: str, request: ConversationRequest):
         "action": "completed",
         "details": {},
         "suggestions": [],
-        "updatedMetrics": updated_metrics if updated_metrics else {}
+        "updatedMetrics": updated_metrics if updated_metrics else {},
+        "reasoning": reasoning_steps,
+        "goals": autonomous_goals.get(session_id, []),
+        "autoExecute": auto_execute_mode.get(session_id, False)
     }
     
     try:

@@ -110,10 +110,10 @@ export async function exportReport(sessionId: string, format: 'json' | 'csv' | '
 }
 
 // Conversation
-export async function sendMessage(sessionId: string, message: string) {
+export async function sendMessage(sessionId: string, message: string, autoExecute?: boolean) {
   return fetchJSON(`${API_BASE}/conversation/${sessionId}`, {
     method: 'POST',
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, autoExecute: autoExecute || false }),
   });
 }
 
