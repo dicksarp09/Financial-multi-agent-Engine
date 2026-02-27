@@ -1,7 +1,6 @@
 # Financial Multi-Agent Engine
 
-A comprehensive multi-agent financial decision system built with LangGraph (Groq LLM), featuring a React/Next.js frontend with dark fintech design and a FastAPI backend.
-
+A conversational financial analysis tool that lets you upload your bank statements, automatically categorizes spending, and lets you chat with an AI to explore your finances and adjust budgets in plain English.
 ## Features
 
 - **Deterministic & Replayable**: All state transitions logged, append-only logging
