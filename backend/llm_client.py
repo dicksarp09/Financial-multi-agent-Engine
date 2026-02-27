@@ -6,22 +6,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 # System prompt for the financial agent
-FINANCIAL_AGENT_SYSTEM_PROMPT = """You are a Financial Analysis Agent. Your role is to help users analyze their financial data, 
-optimize budgets, and understand spending patterns.
+FINANCIAL_AGENT_SYSTEM_PROMPT = """You are a friendly Financial Analysis Assistant. Your role is to help users understand their finances in simple, easy-to-understand language.
 
 You can:
-1. Answer questions about their financial data
-2. Suggest budget optimizations (e.g., "Reduce housing to 30%")
-3. Run what-if simulations (e.g., "What if I spend $200 less on rent?")
-4. Explain anomalies in transactions
-5. Provide financial advice based on the data
+1. Answer questions about their financial data in plain language
+2. Suggest simple budget optimizations
+3. Run what-if simulations
+4. Explain what their numbers mean
+5. Give practical money advice
 
-When responding:
-- Be specific about amounts and percentages
-- Use the user's actual data when available
-- Suggest actionable changes
-- Format numbers with currency symbols and commas
-- Always confirm when you've made changes to their budget
+IMPORTANT FORMATTING RULES:
+- NEVER use tables, asterisks, markdown formatting, or bullet points
+- Use only plain paragraphs and sentences
+- Write like you're explaining to a friend
+- When mentioning money, use dollar signs and commas like $18,500
+- When mentioning percentages, write them as numbers with % sign like 57% not "fifty-seven percent"
+- Keep your response concise but informative - aim for 2-4 short paragraphs
+- If suggesting changes, state them as: "You could try..." or "How about..."
 
 Current context:
 - Report data: {report_summary}
@@ -30,7 +31,7 @@ Current context:
 Conversation history:
 {conversation_history}
 
-Respond in a helpful, professional manner. If you need to clarify something, ask follow-up questions."""
+Now respond to the user's question in friendly, natural language without any tables or formatting."""
 
 
 class LLMClient:
@@ -44,31 +45,36 @@ class LLMClient:
     def build_context(self, report: Optional[Dict], transactions: List[Dict], conversation_history: List[Dict]) -> str:
         """Build context string from report and transactions"""
         
-        # Report summary
+        # Report summary - plain text format
         if report:
-            report_summary = f"""
-- Total Income: ${report.get('total_income', 0):,.2f}
-- Total Expenses: ${report.get('total_expenses', 0):,.2f}
-- Savings Rate: {report.get('savings_rate', 0):.1f}%
-- Risk Score: {report.get('risk_score', 0):.1f}
-
-Category Breakdown:
-{self._format_categories(report.get('category_breakdown', []))}
-
-Budget Recommendations:
-{self._format_budget_recs(report.get('budget_recommendations', []))}
-
-Anomalies: {len(report.get('anomalies', []))} detected
-"""
+            cats = []
+            for c in report.get('category_breakdown', []):
+                amount = c.get('amount', 0)
+                percent = c.get('percent', 0)
+                cats.append(f"{c.get('category')}: ${amount:,.2f} which is {percent:.1f} percent of expenses")
+            cats_text = ", ".join(cats) if cats else "No categories"
+            
+            recs = []
+            for r in report.get('budget_recommendations', []):
+                recs.append(f"{r.get('category')}: currently ${r.get('current_amount', 0):,.2f}, suggested ${r.get('suggested_amount', 0):,.2f}")
+            recs_text = ", ".join(recs) if recs else "No recommendations"
+            
+            report_summary = f"""Your total income is ${report.get('total_income', 0):,.2f} per month.
+Your total expenses are ${report.get('total_expenses', 0):,.2f} per month.
+This means you're saving ${report.get('savings_rate', 0):,.1f} percent of your income.
+Your risk score is {report.get('risk_score', 0):.1f} out of 1.
+Spending breakdown: {cats_text}
+Budget recommendations: {recs_text}
+Number of anomalies detected: {len(report.get('anomalies', []))}"""
         else:
-            report_summary = "No analysis data available. Please upload a CSV and run analysis first."
+            report_summary = "No analysis data available."
         
-        # Recent transactions
-        recent_txns = transactions[:10]
-        recent_transactions = "\n".join([
-            f"- {t.get('date')}: {t.get('description')} - ${t.get('amount'):,.2f} ({t.get('category', 'Uncategorized')})"
+        # Recent transactions - plain text
+        recent_txns = transactions[:5]
+        recent_transactions = ", ".join([
+            f"{t.get('description')} for ${t.get('amount'):,.2f}"
             for t in recent_txns
-        ]) if recent_txns else "No transactions"
+        ]) if recent_txns else "No recent transactions"
         
         # Conversation history
         conv_history = "\n".join([

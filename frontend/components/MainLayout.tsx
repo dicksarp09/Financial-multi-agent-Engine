@@ -196,8 +196,9 @@ export function MainLayout() {
       }]);
       
       // Reload report if metrics changed
-      if (response?.updatedMetrics && currentReport) {
-        await loadReport(currentSessionId);
+      if (response?.updatedMetrics && Object.keys(response.updatedMetrics).length > 0) {
+        console.log('[Chat] Metrics changed, reloading report...');
+        await loadReport(currentSessionId!);
       }
     } catch (error) {
       console.error('[Chat] Error:', error);
@@ -597,7 +598,7 @@ export function MainLayout() {
         </div>
         
         {/* Chat Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 h-[calc(100vh-200px)]">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ maxHeight: '60vh' }}>
           {chatMessages.length === 0 && (
             <div className="text-center py-8">
               <Bot className="w-12 h-12 text-gray-600 mx-auto mb-3" />

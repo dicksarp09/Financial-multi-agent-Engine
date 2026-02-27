@@ -1003,6 +1003,7 @@ async def send_message(session_id: str, request: ConversationRequest):
         }
     
     # Try to use Groq LLM
+    updated_metrics = {}
     try:
         print("[DEBUG] Getting LLM client...")
         llm = get_llm_client()
@@ -1024,6 +1025,76 @@ async def send_message(session_id: str, request: ConversationRequest):
             for t in transactions_data
         ]
         
+        # Check if user wants to make changes
+        message_lower = message.lower()
+        updated_metrics = {}
+        
+        # Handle "cut [category]" or "reduce [category]" requests
+        if "cut" in message_lower or "reduce" in message_lower or "increase" in message_lower:
+            for cat in report_dict.get("category_breakdown", []):
+                cat_name = cat.get("category", "").lower()
+                if cat_name in message_lower:
+                    # Extract percentage if mentioned
+                    import re
+                    pct_match = re.search(r'(\d+)\s*%', message)
+                    amount_match = re.search(r'\$(\d+)', message)
+                    
+                    old_amount = cat.get("amount", 0)
+                    new_amount = old_amount
+                    
+                    if pct_match:
+                        pct = int(pct_match.group(1)) / 100
+                        if "increase" in message_lower:
+                            new_amount = old_amount * (1 + pct)
+                        else:
+                            new_amount = old_amount * (1 - pct)
+                    elif amount_match:
+                        amount_change = int(amount_match.group(1))
+                        if "increase" in message_lower:
+                            new_amount = old_amount + amount_change
+                        else:
+                            new_amount = max(0, old_amount - amount_change)
+                    
+                    # Update expenses and savings
+                    expense_diff = old_amount - new_amount
+                    new_total_expenses = report_dict["total_expenses"] - expense_diff
+                    new_savings = ((report_dict["total_income"] - new_total_expenses) / report_dict["total_income"]) * 100
+                    
+                    # Update the category amount in the list
+                    cat["amount"] = new_amount
+                    
+                    # Also update in report_data for saving
+                    for cat_data in report_data.get("categoryBreakdown", []):
+                        if cat_data.get("category", "").lower() == cat_name:
+                            cat_data["amount"] = new_amount
+                            break
+                    
+                    updated_metrics = {
+                        "total_expenses": new_total_expenses,
+                        "savings_rate": new_savings,
+                        "category_changed": cat.get("category"),
+                        "old_amount": old_amount,
+                        "new_amount": new_amount
+                    }
+                    
+                    # Update in memory
+                    report_data["total_expenses"] = new_total_expenses
+                    report_data["savings_rate"] = new_savings
+                    
+                    # Update in database
+                    db.save_report(session_id, {
+                        "totalIncome": report_dict["total_income"],
+                        "totalExpenses": new_total_expenses,
+                        "savingsRate": new_savings,
+                        "riskScore": report_dict["risk_score"],
+                        "categoryBreakdown": report_dict["category_breakdown"],
+                        "budgetRecommendations": report_dict.get("budget_recommendations", []),
+                        "anomalies": [],
+                        "executionTrace": []
+                    })
+                    print(f"[DEBUG] Updated budget: {cat.get('category')} from {old_amount} to {new_amount}")
+                    break
+        
         # Get LLM response
         llm_response = llm.chat(
             message=message,
@@ -1034,6 +1105,13 @@ async def send_message(session_id: str, request: ConversationRequest):
         
         if llm_response.get("success"):
             response_msg = llm_response["message"]
+            
+            # If we made changes, add confirmation
+            if updated_metrics:
+                cat_name = updated_metrics.get("category_changed", "")
+                old_amt = updated_metrics.get("old_amount", 0)
+                new_amt = updated_metrics.get("new_amount", 0)
+                response_msg = f"I've updated your budget. {cat_name} changed from ${old_amt:,.2f} to ${new_amt:,.2f}. The changes are now reflected on your dashboard.\n\n" + response_msg
         else:
             response_msg = f"I encountered an error: {llm_response.get('error')}. Let me try with the basic analysis instead."
         
@@ -1053,7 +1131,7 @@ async def send_message(session_id: str, request: ConversationRequest):
         "action": "completed",
         "details": {},
         "suggestions": [],
-        "updatedMetrics": {}
+        "updatedMetrics": updated_metrics if updated_metrics else {}
     }
     
     try:
